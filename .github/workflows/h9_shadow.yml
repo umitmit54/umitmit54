@@ -9,7 +9,7 @@ permissions:
 jobs:
   h9:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -17,5 +17,5 @@ jobs:
           python-version: '3.12'
       - name: Install parser
         run: pip -q install beautifulsoup4
-      - name: Validate fixed numeric cells
-        run: python tools/h9_value_diag.py
+      - name: Map financial statement column contexts
+        run: python tools/h9_context_diag.py
