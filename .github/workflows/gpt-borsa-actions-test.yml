@@ -1,11 +1,30 @@
-name: GPT BORSA Actions Test
+name: GPT BORSA Shadow Backfill
 on:
   pull_request:
     branches: [main]
+    paths:
+      - "gpt-borsa-shadow/**"
+      - ".github/workflows/gpt-borsa-actions-test.yml"
 permissions:
   contents: read
 jobs:
-  test:
+  backfill:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - run: echo GPT_BORSA_ACTIONS_OK
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Fetch KAP and Google News shadow data
+        run: python gpt-borsa-shadow/backfill.py
+      - name: Upload shadow data artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gpt-borsa-shadow-backfill
+          path: |
+            shadow_backfill.csv
+            weekly_summary.csv
+            overall.json
+            kap_raw.json
+          retention-days: 7
