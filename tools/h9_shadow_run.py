@@ -9,12 +9,12 @@ new='''def current_xu100():\n    import io\n    url="https://www.borsaistanbul.c
 if old not in s:raise SystemExit('expected current_xu100 block not found')
 s=s.replace(old,new,1)
 
-# 2) KAP taxonomy parser. Outer data rows contain nested <tr> title markup; stop at NEXT data-input-row,
-# not the first nested </tr>. Financial-company balance sheets use TP/YP/Total x current/prior,
-# so total assets are col3 and col6 of the numeric contexts. General schemas use current/prior directly.
+# 2) Exact parser validated on KAP event pages. KAP rows contain nested table markup;
+# parse the outer data-input row as DOM and read raw numeric descendant title attributes.
 start=s.index('def row_values(s,field_prefix):')
 end=s.index('def fetch_reports(ids):',start)
 replacement=r'''def row_values(s,field_prefix):
+    from bs4 import BeautifulSoup
     p=s.find(field_prefix)
     if p<0:return None
     a=s.rfind('<tr class="',0,p)
@@ -22,10 +22,12 @@ replacement=r'''def row_values(s,field_prefix):
     nxt=re.search(r'<tr class="[^"]*data-input-row',s[p+1:],re.I)
     b=(p+1+nxt.start()) if nxt else min(len(s),p+50000)
     row=s[a:b]
+    soup=BeautifulSoup(row,'html.parser')
     vals=[]
-    for td in re.findall(r'<td[^>]*class="[^"]*taxonomy-context-value[^"]*"[^>]*>(.*?)</td>',row,re.S|re.I):
-        m=re.search(r'title="\s*(-?[0-9]+(?:\.[0-9]+)?)\s*"',td)
-        if m: vals.append(float(m.group(1)))
+    for td in soup.find_all('td'):
+        if 'taxonomy-context-value' not in (td.get('class') or []):continue
+        raw=td.find(attrs={'title':re.compile(r'^-?\d+(?:\.\d+)?$')})
+        if raw is not None: vals.append(float(raw.get('title')))
     return vals
 
 def report_fields(s):
