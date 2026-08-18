@@ -1,0 +1,26 @@
+name: GPT BORSA Shadow News Backfill
+on:
+  push:
+    branches: [gpt-borsa-shadow-20260818]
+    paths:
+      - '.github/workflows/news_shadow.yml'
+permissions:
+  contents: read
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run 12-week news backfill
+        run: python tools/news_shadow_collect.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gpt-borsa-news-shadow-12w
+          path: |
+            news_shadow_rows.csv
+            news_shadow_weekly.csv
+          retention-days: 7
