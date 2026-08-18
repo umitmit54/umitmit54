@@ -1,0 +1,30 @@
+name: GPT BORSA Alias News Shadow
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "gpt-borsa-shadow/**"
+      - ".github/workflows/gpt-borsa-actions-test.yml"
+permissions:
+  contents: read
+jobs:
+  alias-news:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Fetch alias-aware Google News shadow data
+        run: python gpt-borsa-shadow/news_alias.py
+      - name: Upload alias News artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gpt-borsa-alias-news-shadow
+          path: |
+            news_alias_backfill.csv
+            news_alias_weekly.csv
+            news_alias_overall.json
+            alias_registry_derived.json
+          retention-days: 7
