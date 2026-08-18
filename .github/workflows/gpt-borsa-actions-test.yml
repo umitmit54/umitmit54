@@ -1,4 +1,4 @@
-name: GPT BORSA Shadow Backfill
+name: GPT BORSA KAP Shadow Backfill
 on:
   pull_request:
     branches: [main]
@@ -8,23 +8,22 @@ on:
 permissions:
   contents: read
 jobs:
-  backfill:
+  kap-backfill:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Fetch KAP and Google News shadow data
-        run: python gpt-borsa-shadow/backfill.py
-      - name: Upload shadow data artifact
+      - name: Fetch KAP shadow data
+        run: python gpt-borsa-shadow/kap_only.py
+      - name: Upload KAP shadow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: gpt-borsa-shadow-backfill
+          name: gpt-borsa-kap-shadow
           path: |
-            shadow_backfill.csv
-            weekly_summary.csv
-            overall.json
-            kap_raw.json
+            kap_only_backfill.csv
+            kap_weekly_summary.csv
+            kap_overall.json
           retention-days: 7
