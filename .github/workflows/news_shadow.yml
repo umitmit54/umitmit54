@@ -2,8 +2,8 @@ name: GPT BORSA Shadow News Backfill
 on:
   push:
     branches: [gpt-borsa-shadow-20260818]
-    paths:
-      - '.github/workflows/news_shadow.yml'
+  pull_request:
+    branches: [main]
 permissions:
   contents: read
 jobs:
