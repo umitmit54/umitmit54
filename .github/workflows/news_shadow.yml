@@ -1,4 +1,4 @@
-name: GPT BORSA Shadow Wikimedia Backfill Fast
+name: GPT BORSA Shadow Wikimedia Backfill Wikitext
 on:
   push:
     branches: [gpt-borsa-shadow-20260818]
@@ -15,13 +15,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Run fast conservative Wikimedia 7d-vs-prior28d backfill
-        run: python tools/wiki_shadow_fast.py
+      - name: Run conservative full-wikitext Wikimedia backfill
+        run: python tools/wiki_shadow_wikitext.py
       - uses: actions/upload-artifact@v4
         with:
-          name: gpt-borsa-wiki-shadow-fast
+          name: gpt-borsa-wiki-shadow-wikitext
           path: |
-            wiki_shadow_rows_fast.csv
-            wiki_shadow_weekly_fast.csv
-            wiki_shadow_entity_map_fast.csv
+            wiki_shadow_rows_wikitext.csv
+            wiki_shadow_weekly_wikitext.csv
+            wiki_shadow_entity_map_wikitext.csv
           retention-days: 7
