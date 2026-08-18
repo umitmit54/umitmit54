@@ -1,4 +1,4 @@
-name: GPT BORSA Shadow Wikimedia Backfill IGS
+name: GPT BORSA Shadow Wikimedia Backfill Fast
 on:
   push:
     branches: [gpt-borsa-shadow-20260818]
@@ -9,18 +9,19 @@ permissions:
 jobs:
   backfill:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Run Wikimedia backfill with IGS issuer map
-        run: python tools/run_wiki_shadow_fixed2.py
+      - name: Run fast conservative Wikimedia 7d-vs-prior28d backfill
+        run: python tools/wiki_shadow_fast.py
       - uses: actions/upload-artifact@v4
         with:
-          name: gpt-borsa-wiki-shadow-7v28-igs
+          name: gpt-borsa-wiki-shadow-fast
           path: |
-            wiki_shadow_rows_7v28.csv
-            wiki_shadow_weekly_7v28.csv
+            wiki_shadow_rows_fast.csv
+            wiki_shadow_weekly_fast.csv
+            wiki_shadow_entity_map_fast.csv
           retention-days: 7
