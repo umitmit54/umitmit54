@@ -1,4 +1,4 @@
-name: GPT BORSA Shadow Wikimedia Backfill Fixed
+name: GPT BORSA KAP Member-Type Diagnostic
 on:
   push:
     branches: [gpt-borsa-shadow-20260818]
@@ -7,20 +7,18 @@ on:
 permissions:
   contents: read
 jobs:
-  backfill:
+  diag:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Run corrected conservative Wikimedia 7d-vs-prior28d backfill
-        run: python tools/run_wiki_shadow_fixed.py
+      - name: Inspect live KAP member types
+        run: python tools/kap_company_types_diag.py
       - uses: actions/upload-artifact@v4
         with:
-          name: gpt-borsa-wiki-shadow-7v28-fixed
-          path: |
-            wiki_shadow_rows_7v28.csv
-            wiki_shadow_weekly_7v28.csv
-          retention-days: 7
+          name: gpt-borsa-kap-member-types-diag
+          path: kap_company_types_diag.json
+          retention-days: 2
