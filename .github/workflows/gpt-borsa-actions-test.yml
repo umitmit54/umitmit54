@@ -1,0 +1,11 @@
+name: GPT BORSA Actions Test
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo GPT_BORSA_ACTIONS_OK
