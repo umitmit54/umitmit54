@@ -1,4 +1,4 @@
-name: GPT BORSA Shadow Wikimedia Backfill
+name: GPT BORSA KAP Company Diagnostic
 on:
   push:
     branches: [gpt-borsa-shadow-20260818]
@@ -7,20 +7,18 @@ on:
 permissions:
   contents: read
 jobs:
-  backfill:
+  diag:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Run conservative Wikimedia 7d-vs-prior28d backfill
-        run: python tools/wiki_shadow_collect.py
+      - name: Inspect KAP company-list response
+        run: python tools/kap_company_diag.py
       - uses: actions/upload-artifact@v4
         with:
-          name: gpt-borsa-wiki-shadow-7v28
-          path: |
-            wiki_shadow_rows_7v28.csv
-            wiki_shadow_weekly_7v28.csv
-          retention-days: 7
+          name: gpt-borsa-kap-company-diag
+          path: kap_company_diag.json
+          retention-days: 2
