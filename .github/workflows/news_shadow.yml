@@ -1,4 +1,4 @@
-name: GPT BORSA Shadow News Backfill
+name: GPT BORSA Shadow KAP Presence Backfill
 on:
   push:
     branches: [gpt-borsa-shadow-20260818]
@@ -9,18 +9,18 @@ permissions:
 jobs:
   backfill:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Run prereg 7d-vs-prior28d news backfill
-        run: python tools/news_shadow_collect_7v28.py
+      - name: Run official KAP 7-day timestamp backfill
+        run: python tools/kap_shadow_collect_any.py
       - uses: actions/upload-artifact@v4
         with:
-          name: gpt-borsa-news-shadow-7v28
+          name: gpt-borsa-kap-shadow-any
           path: |
-            news_shadow_rows_7v28.csv
-            news_shadow_weekly_7v28.csv
+            kap_shadow_rows_any.csv
+            kap_shadow_events_any.csv
           retention-days: 7
