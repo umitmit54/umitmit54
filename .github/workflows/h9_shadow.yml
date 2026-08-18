@@ -15,11 +15,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Run corrected preregistered H9 shadow
+      - name: Install KAP DOM parser
+        run: pip -q install beautifulsoup4
+      - name: Run preregistered H9 shadow with validated DOM parser
         run: python tools/h9_shadow_run.py
       - uses: actions/upload-artifact@v4
         with:
-          name: gpt-borsa-h9-pead-shadow-corrected
+          name: gpt-borsa-h9-pead-shadow-dom
           path: |
             h9_results.csv
             h9_summary.csv
