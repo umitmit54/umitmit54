@@ -1,4 +1,4 @@
-name: GPT BORSA Shadow KAP Presence Backfill
+name: GPT BORSA Shadow Wikimedia Backfill
 on:
   push:
     branches: [gpt-borsa-shadow-20260818]
@@ -9,18 +9,18 @@ permissions:
 jobs:
   backfill:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Run official KAP 7-day timestamp backfill
-        run: python tools/kap_shadow_collect_any.py
+      - name: Run conservative Wikimedia 7d-vs-prior28d backfill
+        run: python tools/wiki_shadow_collect.py
       - uses: actions/upload-artifact@v4
         with:
-          name: gpt-borsa-kap-shadow-any
+          name: gpt-borsa-wiki-shadow-7v28
           path: |
-            kap_shadow_rows_any.csv
-            kap_shadow_events_any.csv
+            wiki_shadow_rows_7v28.csv
+            wiki_shadow_weekly_7v28.csv
           retention-days: 7
