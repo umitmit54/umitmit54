@@ -1,4 +1,4 @@
-name: GPT BORSA KAP Shadow Backfill
+name: GPT BORSA Alias News Shadow
 on:
   pull_request:
     branches: [main]
@@ -8,22 +8,23 @@ on:
 permissions:
   contents: read
 jobs:
-  kap-backfill:
+  alias-news:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Fetch KAP shadow data
-        run: python gpt-borsa-shadow/kap_only.py
-      - name: Upload KAP shadow artifact
+      - name: Fetch alias-aware Google News shadow data
+        run: python gpt-borsa-shadow/news_alias.py
+      - name: Upload alias News artifact
         uses: actions/upload-artifact@v4
         with:
-          name: gpt-borsa-kap-shadow
+          name: gpt-borsa-alias-news-shadow
           path: |
-            kap_only_backfill.csv
-            kap_weekly_summary.csv
-            kap_overall.json
+            news_alias_backfill.csv
+            news_alias_weekly.csv
+            news_alias_overall.json
+            alias_registry_derived.json
           retention-days: 7
