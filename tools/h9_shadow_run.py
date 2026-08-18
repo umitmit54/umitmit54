@@ -10,7 +10,7 @@ if old not in s:raise SystemExit('expected current_xu100 block not found')
 s=s.replace(old,new,1)
 
 # 2) Exact parser validated on KAP event pages. KAP rows contain nested table markup;
-# parse the outer data-input row as DOM and read raw numeric descendant title attributes.
+# parse the outer data-input row as DOM and read numeric descendant title attributes without regex escaping.
 start=s.index('def row_values(s,field_prefix):')
 end=s.index('def fetch_reports(ids):',start)
 replacement=r'''def row_values(s,field_prefix):
@@ -26,8 +26,12 @@ replacement=r'''def row_values(s,field_prefix):
     vals=[]
     for td in soup.find_all('td'):
         if 'taxonomy-context-value' not in (td.get('class') or []):continue
-        raw=td.find(attrs={'title':re.compile(r'^-?\d+(?:\.\d+)?$')})
-        if raw is not None: vals.append(float(raw.get('title')))
+        for node in td.find_all(attrs={'title':True}):
+            try:
+                vals.append(float(str(node.get('title')).strip()))
+                break
+            except (TypeError,ValueError):
+                pass
     return vals
 
 def report_fields(s):
@@ -42,7 +46,6 @@ def report_fields(s):
     asset_schema='MISSING'; ac=None; ap=None
     if av:
         if len(av)>=6:
-            # Financial schema: TP, YP, Total for current period; then TP, YP, Total for previous period.
             asset_schema='FIN_TP_YP_TOTAL'; ac=av[2]; ap=av[5]
         elif len(av)>=2:
             asset_schema='GENERAL_CURRENT_PRIOR'; ac=av[0]; ap=av[1]
