@@ -17,5 +17,5 @@ jobs:
           python-version: '3.12'
       - name: Install parser
         run: pip -q install beautifulsoup4
-      - name: Map financial statement column contexts
-        run: python tools/h9_context_diag.py
+      - name: Inspect financial schema headers
+        run: python tools/h9_header_diag.py
