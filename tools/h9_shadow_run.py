@@ -9,49 +9,67 @@ new='''def current_xu100():\n    import io\n    url="https://www.borsaistanbul.c
 if old not in s:raise SystemExit('expected current_xu100 block not found')
 s=s.replace(old,new,1)
 
-# 2) Exact parser validated on KAP event pages. KAP rows contain nested table markup;
-# parse the outer data-input row as DOM and read numeric descendant title attributes without regex escaping.
+# 2) Parse only actual rendered KAP taxonomy data rows.
+# The same taxonomy field can appear earlier in metadata/schema text, so string-first-match is invalid.
 start=s.index('def row_values(s,field_prefix):')
 end=s.index('def fetch_reports(ids):',start)
-replacement=r'''def row_values(s,field_prefix):
+replacement=r'''def report_fields(s):
     from bs4 import BeautifulSoup
-    p=s.find(field_prefix)
-    if p<0:return None
-    a=s.rfind('<tr class="',0,p)
-    if a<0:return None
-    nxt=re.search(r'<tr class="[^"]*data-input-row',s[p+1:],re.I)
-    b=(p+1+nxt.start()) if nxt else min(len(s),p+50000)
-    row=s[a:b]
-    soup=BeautifulSoup(row,'html.parser')
-    vals=[]
-    for td in soup.find_all('td'):
-        if 'taxonomy-context-value' not in (td.get('class') or []):continue
-        for node in td.find_all(attrs={'title':True}):
-            try:
-                vals.append(float(str(node.get('title')).strip()))
-                break
-            except (TypeError,ValueError):
-                pass
-    return vals
+    soup=BeautifulSoup(s,'html.parser')
 
-def report_fields(s):
+    def values_for(field_prefix):
+        candidates=[]
+        for td in soup.find_all('td'):
+            cls=td.get('class') or []
+            if 'taxonomy-field-name-cell' not in cls:
+                continue
+            field=' '.join(td.stripped_strings).strip()
+            if not field.startswith(field_prefix):
+                continue
+            tr=td.find_parent('tr')
+            if tr is None or 'data-input-row' not in (tr.get('class') or []):
+                continue
+            vals=[]
+            for cell in tr.find_all('td',recursive=False):
+                ccls=cell.get('class') or []
+                if 'taxonomy-context-value' not in ccls:
+                    continue
+                val=None
+                for node in cell.find_all(attrs={'title':True}):
+                    try:
+                        val=float(str(node.get('title')).strip())
+                        break
+                    except (TypeError,ValueError):
+                        pass
+                if val is not None:
+                    vals.append(val)
+            if vals:
+                candidates.append(vals)
+        return max(candidates,key=len) if candidates else None
+
+    # Consolidated owners-of-parent net profit first; generic ProfitLoss for banks/non-consolidated schemas.
     earn_type='OWNER'
-    ev=row_values(s,'ifrs-full_ProfitLossAttributableToOwnersOfParent|')
+    ev=values_for('ifrs-full_ProfitLossAttributableToOwnersOfParent|')
     if not ev or len(ev)<2:
         earn_type='PROFITLOSS'
-        ev=row_values(s,'ifrs-full_ProfitLoss|')
+        ev=values_for('ifrs-full_ProfitLoss|')
     if not ev or len(ev)<2:
         earn_type='MISSING'; ev=None
-    av=row_values(s,'ifrs-full_Assets|')
+
+    av=values_for('ifrs-full_Assets|')
     asset_schema='MISSING'; ac=None; ap=None
     if av:
+        # Financial-company schema may expose TL/FX/Total for each period (6 context cells).
         if len(av)>=6:
             asset_schema='FIN_TP_YP_TOTAL'; ac=av[2]; ap=av[5]
         elif len(av)>=2:
             asset_schema='GENERAL_CURRENT_PRIOR'; ac=av[0]; ap=av[1]
-    return {'earn_type':earn_type,'ni_current':ev[0] if ev and len(ev)>0 else None,
+
+    return {'earn_type':earn_type,
+            'ni_current':ev[0] if ev and len(ev)>0 else None,
             'ni_prior':ev[1] if ev and len(ev)>1 else None,
-            'assets_current':ac,'assets_prior':ap,'asset_schema':asset_schema,'asset_n':len(av) if av else 0}
+            'assets_current':ac,'assets_prior':ap,
+            'asset_schema':asset_schema,'asset_n':len(av) if av else 0}
 
 '''
 s=s[:start]+replacement+s[end:]
