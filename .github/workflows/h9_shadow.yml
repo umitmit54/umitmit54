@@ -7,20 +7,20 @@ on:
 permissions:
   contents: read
 jobs:
-  h9:
+  h10:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Install KAP DOM parser
-        run: pip -q install beautifulsoup4
-      - name: Retry 51 rate-limited KAP reports
-        run: python tools/h9_retry_51.py
+      - name: Run preregistered H10 2022-2026
+        run: python tools/h10_historical.py
       - uses: actions/upload-artifact@v4
         with:
-          name: gpt-borsa-h9-retry-51
-          path: h9_retry_51.csv
+          name: gpt-borsa-h10-historical
+          path: |
+            h10_historical_events.csv
+            h10_historical_summary.csv
           retention-days: 7
