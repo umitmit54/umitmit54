@@ -1,0 +1,24 @@
+name: GPT BORSA H10 Historical
+on:
+  push:
+    branches: [gpt-borsa-h9-20260818]
+permissions:
+  contents: read
+jobs:
+  h10:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run preregistered H10 2022-2026
+        run: python tools/h10_historical.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gpt-borsa-h10-historical
+          path: |
+            h10_historical_events.csv
+            h10_historical_summary.csv
+          retention-days: 7
