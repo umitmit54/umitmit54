@@ -9,11 +9,33 @@ new='''def current_xu100():\n    import io\n    url="https://www.borsaistanbul.c
 if old not in s:raise SystemExit('expected current_xu100 block not found')
 s=s.replace(old,new,1)
 
-# 2) Parse only actual rendered KAP taxonomy data rows.
-# The same taxonomy field can appear earlier in metadata/schema text, so string-first-match is invalid.
+# 2) KAP can return a successful HTTP page without rendered taxonomy under burst load.
+# Validate content and retry; use low concurrency for the 320-report backfill.
+a=s.index('def fetch_page(did,tries=3):')
+b=s.index('def row_values(s,field_prefix):',a)
+fetch_replacement=r'''def fetch_page(did,tries=7):
+    last=None
+    for i in range(tries):
+        try:
+            req=urllib.request.Request(BASE+'/tr/Bildirim/'+str(did),headers={'User-Agent':'Mozilla/5.0','Accept-Language':'tr-TR,tr;q=0.9'})
+            with urllib.request.urlopen(req,timeout=90) as r:s=r.read().decode('utf-8','replace')
+            for aa,bb in ESC:s=s.replace(aa,bb)
+            s=s.replace('\\"','"')
+            if 'taxonomy-field-name-cell' not in s or 'data-input-row' not in s:
+                raise RuntimeError('KAP_PAGE_INCOMPLETE')
+            return s
+        except Exception as e:
+            last=e
+            time.sleep(min(12,1.5*(i+1)))
+    raise last
+
+'''
+s=s[:a]+fetch_replacement+s[b:]
+
+# 3) Parse only actual rendered KAP taxonomy data rows.
 start=s.index('def row_values(s,field_prefix):')
 end=s.index('def fetch_reports(ids):',start)
-replacement=r'''def report_fields(s):
+parser_replacement=r'''def report_fields(s):
     from bs4 import BeautifulSoup
     soup=BeautifulSoup(s,'html.parser')
 
@@ -47,7 +69,6 @@ replacement=r'''def report_fields(s):
                 candidates.append(vals)
         return max(candidates,key=len) if candidates else None
 
-    # Consolidated owners-of-parent net profit first; generic ProfitLoss for banks/non-consolidated schemas.
     earn_type='OWNER'
     ev=values_for('ifrs-full_ProfitLossAttributableToOwnersOfParent|')
     if not ev or len(ev)<2:
@@ -59,7 +80,6 @@ replacement=r'''def report_fields(s):
     av=values_for('ifrs-full_Assets|')
     asset_schema='MISSING'; ac=None; ap=None
     if av:
-        # Financial-company schema may expose TL/FX/Total for each period (6 context cells).
         if len(av)>=6:
             asset_schema='FIN_TP_YP_TOTAL'; ac=av[2]; ap=av[5]
         elif len(av)>=2:
@@ -72,5 +92,32 @@ replacement=r'''def report_fields(s):
             'asset_schema':asset_schema,'asset_n':len(av) if av else 0}
 
 '''
-s=s[:start]+replacement+s[end:]
+s=s[:start]+parser_replacement+s[end:]
+
+# 4) Lower report-page concurrency and surface fetch/parse failures explicitly in logs.
+start=s.index('def fetch_reports(ids):')
+end=s.index('def yahoo_series(',start)
+reports_replacement=r'''def fetch_reports(ids):
+    out={}
+    def one(i):
+        try:
+            page=fetch_page(i)
+            fields=report_fields(page)
+            return i,fields,None
+        except Exception as e:
+            return i,None,repr(e)
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        fut=[ex.submit(one,i) for i in sorted(set(ids))]
+        errs=0
+        for j,f in enumerate(as_completed(fut),1):
+            i,v,e=f.result(); out[i]={'fields':v,'error':e}
+            if e:
+                errs+=1
+                if errs<=10:print('REPORT_ERROR',i,e,flush=True)
+            if j%25==0:print('REPORTS',j,'/',len(fut),'ERRORS',errs,flush=True)
+    print('REPORT_FETCH_ERRORS',errs,flush=True)
+    return out
+
+'''
+s=s[:start]+reports_replacement+s[end:]
 exec(compile(s,p,'exec'),{'__name__':'__main__','__file__':p})
