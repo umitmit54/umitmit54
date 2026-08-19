@@ -9,7 +9,7 @@ permissions:
 jobs:
   h9:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -17,5 +17,14 @@ jobs:
           python-version: '3.12'
       - name: Install KAP DOM parser
         run: pip -q install beautifulsoup4
-      - name: Smoke-test KAP taxonomy parser
-        run: python tools/h9_parser_smoke.py
+      - name: Run preregistered H9 shadow rate-limit-safe
+        run: python tools/h9_shadow_run.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gpt-borsa-h9-pead-shadow-final
+          path: |
+            h9_results.csv
+            h9_summary.csv
+            h9_universe.csv
+            h9_coverage.csv
+          retention-days: 7
