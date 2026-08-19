@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import csv,json,math,re,time,urllib.request,io
+import csv,json,math,re,time,urllib.request,io,os
 from concurrent.futures import ThreadPoolExecutor,as_completed
 from datetime import date,datetime,timedelta,timezone
 
@@ -124,7 +124,10 @@ if len(cur)!=100:raise SystemExit('current XU100 gate failed')
 u=universes(cur)
 print('PIT_COUNTS',[(q,len(u[q])) for q in QS],flush=True)
 if any(abs(len(x)-100)>5 for x in u.values()):raise SystemExit('PIT universe severe gate failed')
-print('KAP',flush=True);rows=collect(date(2022,1,1),date(2026,8,19),'',31);ev=choose(rows,u);print('EVENTS',len(ev),flush=True)
+run_year=int(os.environ.get('H10_YEAR','0') or 0)
+start=date(run_year,1,1) if run_year else date(2022,1,1)
+end=min(date(run_year,12,31),date(2026,8,19)) if run_year else date(2026,8,19)
+print('KAP_RANGE',start,end,flush=True);rows=collect(start,end,'',7);ev=choose(rows,u);print('EVENTS',len(ev),flush=True)
 pp=prices([t for t,_,_ in ev]);idx=pp['__INDEX__'][0];out=[]
 for t,dt,e in ev:
  row={'Cohort':f'{e.get("year")}-{e.get("ruleType")}-{e.get("period")}','Ticker':t,'DisclosureIndex':e.get('disclosureIndex'),'PublishDate':e.get('publishDate')}
@@ -139,7 +142,8 @@ for c in sorted(set(r['Cohort'] for r in out)):
   q=[r for r in v if r[f'ForwardExcess_{h}'] is not None];rec[f'IC_{h}']=rho([r[f'InitialExcess_{h}'] for r in q],[r[f'ForwardExcess_{h}'] for r in q]) if len(q)>=3 else None
   q=sorted(q,key=lambda r:r[f'InitialExcess_{h}']);n=max(1,math.ceil(len(q)/3));rec[f'TopMinusBottom_{h}']=(sum(r[f'ForwardExcess_{h}'] for r in q[-n:])/n-sum(r[f'ForwardExcess_{h}'] for r in q[:n])/n-.002) if q else None
  summary.append(rec)
-for fn,data in [('h10_historical_events.csv',out),('h10_historical_summary.csv',summary)]:
+suffix=f'_{run_year}' if run_year else ''
+for fn,data in [(f'h10_historical_events{suffix}.csv',out),(f'h10_historical_summary{suffix}.csv',summary)]:
  with open(fn,'w',newline='',encoding='utf-8') as f:
   w=csv.DictWriter(f,fieldnames=list(data[0]));w.writeheader();w.writerows(data)
 print('SUMMARY_JSON',json.dumps(summary,ensure_ascii=False),flush=True)
