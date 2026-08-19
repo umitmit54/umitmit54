@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import csv,json,math,re,time,urllib.request
+import csv,json,math,re,time,urllib.request,io
 from concurrent.futures import ThreadPoolExecutor,as_completed
 from datetime import date,datetime,timedelta,timezone
 
@@ -50,9 +50,19 @@ def pdt(s):
   try:return datetime.strptime(str(s)[:19],f)
   except:pass
 def current():
- s=set()
- for e in collect(date(2026,1,1),date(2026,8,11),IDX):s.update(codes(e.get('stockCodes')))
- return s
+ url='https://www.borsaistanbul.com/datum/hisse_endeks_ds.csv'
+ req=urllib.request.Request(url,headers={'User-Agent':'Mozilla/5.0'})
+ with urllib.request.urlopen(req,timeout=60) as r:raw=r.read()
+ text=None
+ for enc in ('utf-8-sig','cp1254','latin-1'):
+  try:text=raw.decode(enc);break
+  except:pass
+ out=set()
+ for row in csv.DictReader(io.StringIO(text),delimiter=';'):
+  if str(row.get('ENDEKS KODU') or '').strip()=='XU100':
+   t=re.sub(r'\.E$','',str(row.get('BILESEN KODU') or '').strip().upper())
+   if re.fullmatch(r'[A-Z0-9]{3,6}',t):out.add(t)
+ return out
 def universes(cur):
  u={};s=set(cur)
  for q in reversed(QS):
