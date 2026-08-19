@@ -10,17 +10,24 @@ jobs:
   h10:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        year: [2022, 2023, 2024, 2025, 2026]
+    env:
+      H10_YEAR: ${{ matrix.year }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Run preregistered H10 2022-2026
+      - name: Run full-coverage H10 year shard
         run: python tools/h10_historical.py
       - uses: actions/upload-artifact@v4
         with:
-          name: gpt-borsa-h10-historical
+          name: gpt-borsa-h10-${{ matrix.year }}
           path: |
-            h10_historical_events.csv
-            h10_historical_summary.csv
+            h10_historical_events_${{ matrix.year }}.csv
+            h10_historical_summary_${{ matrix.year }}.csv
           retention-days: 7
