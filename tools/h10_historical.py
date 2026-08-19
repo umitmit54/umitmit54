@@ -26,7 +26,7 @@ CHANGES={
 '2026-Q2':('CVKMD EUREN PAHOL PSGYO SARKY','EGEEN KCAER TSPOR TTRAK YEOTK'),
 '2026-Q3':('ESEN IEYHO ODINE','AGHOL TABGD TUREX')}
 QS=sorted(CHANGES)
-def post(a,b,index='',tries=4):
+def post(a,b,index='',tries=8):
  p={'fromDate':a,'toDate':b,'memberType':'IGS','mkkMemberOidList':[],'inactiveMkkMemberOidList':[],'disclosureClass':'','subjectList':[],'isLate':'','mainSector':'','sector':'','subSector':'','marketOid':'','index':index,'bdkReview':'','bdkMemberOidList':[],'year':'','term':'','ruleType':'','period':'','fromSrc':False,'srcCategory':'','disclosureIndexList':[]}
  for i in range(tries):
   try:
@@ -37,7 +37,7 @@ def post(a,b,index='',tries=4):
     if isinstance(o.get(k),list):return o[k]
   except Exception as e:
    if i==tries-1:raise
-   time.sleep(1.5*(i+1))
+   time.sleep(min(40,5*(i+1)))
  return []
 def collect(a,b,index='',chunk=7):
  out=[];d=a
@@ -124,7 +124,7 @@ if len(cur)!=100:raise SystemExit('current XU100 gate failed')
 u=universes(cur)
 print('PIT_COUNTS',[(q,len(u[q])) for q in QS],flush=True)
 if any(abs(len(x)-100)>5 for x in u.values()):raise SystemExit('PIT universe severe gate failed')
-print('KAP',flush=True);rows=collect(date(2022,1,1),date(2026,8,19),'',7);ev=choose(rows,u);print('EVENTS',len(ev),flush=True)
+print('KAP',flush=True);rows=collect(date(2022,1,1),date(2026,8,19),'',31);ev=choose(rows,u);print('EVENTS',len(ev),flush=True)
 pp=prices([t for t,_,_ in ev]);idx=pp['__INDEX__'][0];out=[]
 for t,dt,e in ev:
  row={'Cohort':f'{e.get("year")}-{e.get("ruleType")}-{e.get("period")}','Ticker':t,'DisclosureIndex':e.get('disclosureIndex'),'PublishDate':e.get('publishDate')}
