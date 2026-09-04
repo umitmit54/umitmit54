@@ -1,7 +1,7 @@
 from __future__ import annotations
 import pandas as pd
 
-# Anchor: published BIST100 constituent list used in a peer-reviewed study, matching 2019 Q3.
+# Anchor: published BIST100 constituent list matching 2019 Q3.
 Q3_2019 = set('''ADESE AEFES AFYON AGHOL AKBNK AKSA AKSEN ALARK ALBRK ALGYO ANACM ARCLK ASELS AVOD BERA BIMAS BJKAS CCOLA CEMAS CEMTS CLEBI DGKLB DOHOL ECILC EGEEN ENKAI EKGYO ENJSA EREGL FENER FROTO GARAN GENTS GEREL GOLTS GOZDE GSDHO GSRAY GUBRF HALKB HEKTS HURGZ ICBCT IEYHO IHLAS IHLGM INDES IPEKE ISCTR ISDMR ISFIN ISGYO ITTFH KARSN KCHOL KERVT KONYA KORDS KOZAA KOZAL KRDMD MAVI METRO MGROS MPARK NETAS NTHOL ODAS OTKAR OZGYO PARSN PETKM PGSUS POLHO PRKME SAHOL SASA SISE SKBNK SODA SOKM TAVHL TCELL THYAO TKFEN TMSN TOASO TRKCM TSKB TTKOM TTRAK TUKAS TUPRS ULKER VAKBN VERUS VESTL YATAS YKBNK ZOREN'''.split())
 
 # Official Borsa Istanbul periodic changes.
@@ -28,12 +28,25 @@ UNIVERSES['2019Q1'] = reverse(UNIVERSES['2019Q2'], *CHANGES['2019Q2'])
 UNIVERSES['2019Q4'] = apply(UNIVERSES['2019Q3'], *CHANGES['2019Q4'])
 UNIVERSES['2020Q1'] = apply(UNIVERSES['2019Q4'], *CHANGES['2020Q1'])
 UNIVERSES['2020Q2'] = apply(UNIVERSES['2020Q1'], *CHANGES['2020Q2'])
-UNIVERSES['2020Q3'] = apply(UNIVERSES['2020Q2'], *CHANGES['2020Q3'])
-UNIVERSES['2020Q4'] = apply(UNIVERSES['2020Q3'], *CHANGES['2020Q4'])
+
+# Intra-quarter corporate action: ADANA stopped trading due OYAK cement merger on 20 May 2020;
+# its Q2 reserve SARKY entered the index from 21 May 2020.
+Q2_2020_AFTER_MERGER = (set(UNIVERSES['2020Q2']) - {'ADANA'}) | {'SARKY'}
+
+# Q3 periodic changes are applied to the actual end-Q2 membership, where SARKY was already active.
+UNIVERSES['2020Q3'] = apply(Q2_2020_AFTER_MERGER, *CHANGES['2020Q3'])
+
+# Symbol continuity: GUSGR became TURSG after the merger/registration around 31 Aug-1 Sep 2020.
+Q3_2020_AFTER_RENAME = (set(UNIVERSES['2020Q3']) - {'GUSGR'}) | {'TURSG'}
+UNIVERSES['2020Q4'] = apply(Q3_2020_AFTER_RENAME, *CHANGES['2020Q4'])
 
 for k,v in UNIVERSES.items():
     if len(v) != 100:
         raise RuntimeError(f'{k} reconstructed universe has {len(v)} symbols, expected 100')
+if len(Q2_2020_AFTER_MERGER) != 100 or len(Q3_2020_AFTER_RENAME) != 100:
+    raise RuntimeError('intra-quarter reconstructed universe must contain 100 symbols')
+
+ALL_SYMBOLS = sorted(set().union(*UNIVERSES.values()) | Q2_2020_AFTER_MERGER | Q3_2020_AFTER_RENAME)
 
 def quarter_key(dt) -> str:
     d = pd.Timestamp(dt)
@@ -41,10 +54,18 @@ def quarter_key(dt) -> str:
     return f'{d.year}Q{q}'
 
 def universe_for_date(dt) -> list[str]:
-    k = quarter_key(dt)
+    d = pd.Timestamp(dt)
+    k = quarter_key(d)
     if k not in UNIVERSES:
         raise KeyError(k)
+    if k == '2020Q2' and d >= pd.Timestamp('2020-05-21'):
+        return sorted(Q2_2020_AFTER_MERGER)
+    if k == '2020Q3' and d >= pd.Timestamp('2020-09-01'):
+        return sorted(Q3_2020_AFTER_RENAME)
     return sorted(UNIVERSES[k])
 
 if __name__ == '__main__':
     for k in sorted(UNIVERSES): print(k, len(UNIVERSES[k]), ','.join(sorted(UNIVERSES[k])[:5]), '...', ','.join(sorted(UNIVERSES[k])[-5:]))
+    print('2020Q2 after 2020-05-21', len(Q2_2020_AFTER_MERGER))
+    print('2020Q3 after 2020-09-01', len(Q3_2020_AFTER_RENAME))
+    print('ALL_SYMBOLS', len(ALL_SYMBOLS))
