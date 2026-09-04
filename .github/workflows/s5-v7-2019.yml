@@ -1,0 +1,26 @@
+name: S5 V7 2019 Holdout
+on:
+  push:
+    paths:
+      - 'bist-s4-backtest/s5_v7_2019.py'
+      - '.github/workflows/s5-v7-2019.yml'
+  workflow_dispatch:
+jobs:
+  holdout:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r bist-s4-backtest/requirements.txt
+      - name: Run S5 V7 2019 holdout
+        run: python bist-s4-backtest/s5_v7_2019.py
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: s5-v7-2019-results
+          path: bist-s4-backtest/output_s5v7_2019/
+          retention-days: 90
