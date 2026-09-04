@@ -1,4 +1,4 @@
-name: BIST S4 Backtest
+name: BIST S4-S5 Backtest
 
 on:
   workflow_dispatch:
@@ -22,10 +22,19 @@ jobs:
         run: pip install -r bist-s4-backtest/requirements.txt
       - name: Run S4 backtest
         run: python bist-s4-backtest/backtest.py
-      - name: Upload results
+      - name: Run S5 leader-radar backtest
+        run: python bist-s4-backtest/s5_backtest.py
+      - name: Upload S4 results
         uses: actions/upload-artifact@v4
         with:
           name: bist-s4-backtest-results
           path: bist-s4-backtest/output/*.csv
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload S5 results
+        uses: actions/upload-artifact@v4
+        with:
+          name: bist-s5-backtest-results
+          path: bist-s4-backtest/output_s5/*.csv
           if-no-files-found: error
           retention-days: 30
