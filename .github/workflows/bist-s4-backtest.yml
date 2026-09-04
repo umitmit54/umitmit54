@@ -22,8 +22,10 @@ jobs:
         run: pip install -r bist-s4-backtest/requirements.txt
       - name: Run S4 backtest
         run: python bist-s4-backtest/backtest.py
-      - name: Run S5 leader-radar backtest
+      - name: Run S5 V1 leader-radar backtest
         run: python bist-s4-backtest/s5_backtest.py
+      - name: Run S5 V2 KAP event radar
+        run: python bist-s4-backtest/s5_v2_event.py
       - name: Upload S4 results
         uses: actions/upload-artifact@v4
         with:
@@ -31,10 +33,17 @@ jobs:
           path: bist-s4-backtest/output/*.csv
           if-no-files-found: error
           retention-days: 30
-      - name: Upload S5 results
+      - name: Upload S5 V1 results
         uses: actions/upload-artifact@v4
         with:
           name: bist-s5-backtest-results
           path: bist-s4-backtest/output_s5/*.csv
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload S5 V2 results
+        uses: actions/upload-artifact@v4
+        with:
+          name: bist-s5v2-backtest-results
+          path: bist-s4-backtest/output_s5v2/*.csv
           if-no-files-found: error
           retention-days: 30
