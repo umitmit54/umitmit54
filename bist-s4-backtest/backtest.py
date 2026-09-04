@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 from pathlib import Path
 
 import borsapy as bp
@@ -16,39 +15,36 @@ OUT.mkdir(exist_ok=True)
 def norm_cols(df: pd.DataFrame) -> pd.DataFrame:
     x = df.copy()
     x.columns = [str(c).strip().lower().replace(" ", "_") for c in x.columns]
-    aliases = {
-        "adj_close": "close",
-        "datetime": "date",
-    }
-    x = x.rename(columns={k: v for k, v in aliases.items() if k in x.columns})
-    return x
+    if "adj_close" in x.columns and "close" not in x.columns:
+        x = x.rename(columns={"adj_close": "close"})
+    if not isinstance(x.index, pd.DatetimeIndex):
+        try:
+            x.index = pd.to_datetime(x.index)
+        except Exception:
+            pass
+    return x.sort_index()
 
 
-def safe_history(symbol: str, start: str, end: str) -> pd.DataFrame:
+def fetch_stock(symbol: str, start: str, end: str) -> pd.DataFrame:
     try:
         df = bp.Ticker(symbol).history(start=start, end=end)
-        if df is None or len(df) == 0:
-            return pd.DataFrame()
-        df = norm_cols(df)
-        if not isinstance(df.index, pd.DatetimeIndex):
-            try:
-                df.index = pd.to_datetime(df.index)
-            except Exception:
-                pass
-        return df.sort_index()
+        return pd.DataFrame() if df is None or len(df) == 0 else norm_cols(df)
     except Exception as exc:
         print(f"WARN {symbol}: {exc}")
         return pd.DataFrame()
 
 
-def index_history(start: str, end: str) -> pd.DataFrame:
-    df = bp.Index("XU100").history(start=start, end=end)
-    return norm_cols(df).sort_index()
+def fetch_index(start: str, end: str) -> pd.DataFrame:
+    try:
+        df = bp.Index("XU100").history(start=start, end=end)
+        return pd.DataFrame() if df is None or len(df) == 0 else norm_cols(df)
+    except Exception as exc:
+        print(f"WARN XU100: {exc}")
+        return pd.DataFrame()
 
 
-def get_current_universe() -> list[str]:
-    idx = bp.Index("XU100")
-    syms = list(idx.component_symbols)
+def current_universe() -> list[str]:
+    syms = list(bp.Index("XU100").component_symbols)
     return sorted({str(s).strip().upper() for s in syms if s})
 
 
@@ -56,6 +52,18 @@ def pct(a: float, b: float) -> float:
     if a is None or b is None or not np.isfinite(a) or not np.isfinite(b) or a == 0:
         return np.nan
     return b / a - 1.0
+
+
+def slice_dates(df: pd.DataFrame, start, end) -> pd.DataFrame:
+    if df.empty or not isinstance(df.index, pd.DatetimeIndex):
+        return pd.DataFrame()
+    s = pd.Timestamp(start)
+    e = pd.Timestamp(end)
+    idx = df.index
+    if idx.tz is not None:
+        s = s.tz_localize(idx.tz)
+        e = e.tz_localize(idx.tz)
+    return df.loc[(idx >= s) & (idx <= e)].copy()
 
 
 def score_row(hist: pd.DataFrame, bench: pd.DataFrame, catalyst_bonus: float) -> dict | None:
@@ -67,11 +75,11 @@ def score_row(hist: pd.DataFrame, bench: pd.DataFrame, catalyst_bonus: float) ->
     v = h["volume"].astype(float)
 
     ret20 = pct(c.iloc[0], c.iloc[-1])
-    ret5 = pct(c.iloc[-6], c.iloc[-1]) if len(c) >= 6 else np.nan
-    ret3 = pct(c.iloc[-4], c.iloc[-1]) if len(c) >= 4 else np.nan
+    ret5 = pct(c.iloc[-6], c.iloc[-1])
+    ret3 = pct(c.iloc[-4], c.iloc[-1])
     high20 = float(h["high"].astype(float).max())
     dist_high = c.iloc[-1] / high20 - 1.0 if high20 else np.nan
-    vol20 = float(v.iloc[:-1].mean()) if len(v) > 1 else np.nan
+    vol20 = float(v.iloc[:-1].mean())
     vol1_ratio = float(v.iloc[-1] / vol20) if vol20 and np.isfinite(vol20) else np.nan
     vol5_ratio = float(v.iloc[-5:].mean() / vol20) if vol20 and np.isfinite(vol20) else np.nan
 
@@ -116,8 +124,19 @@ def main() -> None:
     cats = pd.read_csv(CFG / "catalysts.csv", dtype={"week_start": str, "symbol": str, "bonus": float, "note": str})
     cats["symbol"] = cats["symbol"].str.upper()
 
-    universe = get_current_universe()
+    universe = current_universe()
     print(f"Current XU100 proxy universe: {len(universe)} symbols")
+
+    global_start = (pd.Timestamp(weeks.week_start.min()) - pd.Timedelta(days=60)).strftime("%Y-%m-%d")
+    global_end = (pd.Timestamp(weeks.week_end.max()) + pd.Timedelta(days=2)).strftime("%Y-%m-%d")
+
+    print(f"Downloading one history per symbol: {global_start} -> {global_end}")
+    cache: dict[str, pd.DataFrame] = {}
+    for i, symbol in enumerate(universe, start=1):
+        cache[symbol] = fetch_stock(symbol, global_start, global_end)
+        if i % 10 == 0:
+            print(f"Downloaded {i}/{len(universe)}")
+    bench_all = fetch_index(global_start, global_end)
 
     all_rankings: list[pd.DataFrame] = []
     summaries: list[dict] = []
@@ -125,12 +144,10 @@ def main() -> None:
     for _, w in weeks.iterrows():
         ws = pd.Timestamp(w.week_start)
         we = pd.Timestamp(w.week_end)
-        pre_start = (ws - pd.Timedelta(days=45)).strftime("%Y-%m-%d")
-        pre_end = (ws - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
-        eval_end = (we + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
-
-        bench_pre = index_history(pre_start, pre_end)
-        bench_week = index_history(ws.strftime("%Y-%m-%d"), eval_end)
+        pre_start = ws - pd.Timedelta(days=45)
+        pre_end = ws - pd.Timedelta(days=1)
+        bench_pre = slice_dates(bench_all, pre_start, pre_end)
+        bench_week = slice_dates(bench_all, ws, we)
         bench_ret = week_return(bench_week)
 
         csub = cats[cats.week_start == w.week_start]
@@ -138,13 +155,20 @@ def main() -> None:
 
         rows = []
         for symbol in universe:
-            hist = safe_history(symbol, pre_start, pre_end)
+            all_hist = cache.get(symbol, pd.DataFrame())
+            hist = slice_dates(all_hist, pre_start, pre_end)
             sc = score_row(hist, bench_pre, bonus_map.get(symbol, 0.0))
             if sc is None:
                 continue
-            wk = safe_history(symbol, ws.strftime("%Y-%m-%d"), eval_end)
-            r = week_return(wk)
-            rows.append({"test_id": w.test_id, "week_start": w.week_start, "week_end": w.week_end, "symbol": symbol, **sc, "week_return": r})
+            wk = slice_dates(all_hist, ws, we)
+            rows.append({
+                "test_id": w.test_id,
+                "week_start": w.week_start,
+                "week_end": w.week_end,
+                "symbol": symbol,
+                **sc,
+                "week_return": week_return(wk),
+            })
 
         rank = pd.DataFrame(rows)
         if rank.empty:
@@ -192,7 +216,7 @@ def main() -> None:
             "avg_s4_return": summary.s4_top5_equal_weight_return.mean(),
             "avg_bist100_return": summary.bist100_return.mean(),
             "avg_alpha": summary.alpha_vs_bist100.mean(),
-            "method_note": "OHLCV is ex-ante; universe uses CURRENT XU100 as historical proxy unless archived constituent snapshots are supplied. Catalyst bonuses only include verified pre-week events in config/catalysts.csv.",
+            "method_note": "OHLCV is ex-ante. Universe is CURRENT_XU100_PROXY until archived constituent snapshots are supplied. Catalyst bonuses include only verified pre-week events in config/catalysts.csv.",
         }])
         stats.to_csv(OUT / "stats.csv", index=False)
 
