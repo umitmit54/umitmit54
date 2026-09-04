@@ -1,0 +1,17 @@
+name: Probe legacy BIST sources
+on:
+  push:
+    paths:
+      - 'bist-s4-backtest/probe_legacy_sources.py'
+      - '.github/workflows/probe-legacy-bist-sources.yml'
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install pandas requests
+      - run: python bist-s4-backtest/probe_legacy_sources.py
