@@ -1,0 +1,33 @@
+name: BIST S5 V2 Event Radar
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'bist-s4-backtest/s5_v2_event.py'
+      - 'bist-s4-backtest/config/**'
+      - 'bist-s4-backtest/requirements.txt'
+      - '.github/workflows/bist-s5v2.yml'
+
+jobs:
+  s5v2:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: bist-s4-backtest/requirements.txt
+      - name: Install dependencies
+        run: pip install -r bist-s4-backtest/requirements.txt
+      - name: Run S5 V2 KAP event radar
+        run: python bist-s4-backtest/s5_v2_event.py
+      - name: Upload S5 V2 results
+        uses: actions/upload-artifact@v4
+        with:
+          name: bist-s5v2-backtest-results
+          path: bist-s4-backtest/output_s5v2/*.csv
+          if-no-files-found: error
+          retention-days: 30
