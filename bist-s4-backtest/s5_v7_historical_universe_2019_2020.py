@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import borsapy as bp
 from s5_v5_valueflow_2022 import fetch_stock,sl,features,session,kap_window,tickers,event_kind_and_direction,wret,pr,pct
-from historical_xu100_2019_2020 import UNIVERSES, universe_for_date
+from historical_xu100_2019_2020 import UNIVERSES, ALL_SYMBOLS, universe_for_date
 
 ROOT=Path(__file__).resolve().parent
 OUT=ROOT/'output_s5v7_hist_2019_2020'; OUT.mkdir(exist_ok=True)
@@ -67,13 +67,13 @@ def run_year(year, cache, bench, ks):
         print(w.test_id,regime,'u',len(u),'priced',len(r),'leader',leader.symbol,'rank',lr); time.sleep(.1)
     sm=pd.DataFrame(summaries); rk=pd.concat(ranks,ignore_index=True) if ranks else pd.DataFrame()
     sm.to_csv(OUT/f'summary_{year}.csv',index=False); rk.to_csv(OUT/f'rankings_{year}.csv',index=False)
-    row={'year':year,'weeks':len(sm),'pool_recall':sm.leader_in_pool.mean(),'top5':sm.leader_top5.mean(),'top10':sm.leader_top10.mean(),'top20':sm.leader_top20.mean(),'median_rank':sm.leader_rank.dropna().median(),'avg_portfolio_return':sm.portfolio_return.mean(),'avg_bist100_return':sm.bist100_return.mean(),'avg_alpha':sm.alpha.mean(),'weeks_beating_bist100':int((sm.alpha>0).sum()),'avg_priced_universe':sm.priced_universe.mean(),'note':'V7 frozen. Historical quarterly XU100 universes reconstructed from 2019Q3 exact 100-stock anchor + official Borsa Istanbul periodic changes; no current-XU100 survivorship proxy.'}
+    row={'year':year,'weeks':len(sm),'pool_recall':sm.leader_in_pool.mean(),'top5':sm.leader_top5.mean(),'top10':sm.leader_top10.mean(),'top20':sm.leader_top20.mean(),'median_rank':sm.leader_rank.dropna().median(),'avg_portfolio_return':sm.portfolio_return.mean(),'avg_bist100_return':sm.bist100_return.mean(),'avg_alpha':sm.alpha.mean(),'weeks_beating_bist100':int((sm.alpha>0).sum()),'avg_priced_universe':sm.priced_universe.mean(),'note':'V7 frozen. Point-in-time quarterly XU100 reconstructed from 2019Q3 100-stock anchor + official Borsa Istanbul periodic changes and 2020 intra-quarter ADANA/SARKY and GUSGR/TURSG transitions; no current-XU100 survivorship proxy.'}
     for rg in ['weak','strong']:
         z=sm[sm.regime==rg]; row[f'{rg}_weeks']=len(z); row[f'{rg}_top5']=z.leader_top5.mean() if len(z) else np.nan; row[f'{rg}_alpha']=z.alpha.mean() if len(z) else np.nan
     return row
 
 def main():
-    syms=sorted(set().union(*[v for k,v in UNIVERSES.items() if k.startswith('2019') or k.startswith('2020')]))
+    syms=ALL_SYMBOLS
     print('Historical symbol union',len(syms)); cache={}
     for i,s in enumerate(syms,1):
         cache[s]=fetch_stock(s,'2018-11-01','2021-01-08')
