@@ -1,0 +1,25 @@
+name: Winner DNA Holdout
+on:
+  push:
+    paths:
+      - 'winner-dna/holdout_engine.py'
+      - '.github/workflows/winner-dna-holdout.yml'
+  workflow_dispatch:
+
+jobs:
+  holdout:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install borsapy pandas numpy
+      - name: Run DNA holdout
+        run: python winner-dna/holdout_engine.py
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: winner-dna-holdout-results
+          path: winner-dna/output/holdout_*.csv
