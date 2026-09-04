@@ -10,6 +10,10 @@ from historical_xu100_2019_2020 import ALL_SYMBOLS, universe_for_date
 ROOT=Path(__file__).resolve().parent
 OUT=ROOT/'output_s5v7_hist_2019_2020'; OUT.mkdir(exist_ok=True)
 
+# Same listed security, later ticker-code changes. Only used as a price-history fallback;
+# historical universe and KAP matching keep the old ticker.
+PRICE_ALIASES={'DGKLB':'DGNMO','ITTFH':'LRSHO','GUSGR':'TURSG','KOZAA':'TRMET'}
+
 def fetch_index(a,b):
     try:
         d=bp.Index('XU100').history(start=a,end=b)
@@ -77,7 +81,7 @@ def run_year(year, cache, bench):
         print(w.test_id,regime,'u',len(u),'priced',len(r),'kap',kap_ok,'leader',leader.symbol,'rank',lr); time.sleep(.1)
     sm=pd.DataFrame(summaries); rk=pd.concat(ranks,ignore_index=True) if ranks else pd.DataFrame()
     sm.to_csv(OUT/f'summary_{year}.csv',index=False); rk.to_csv(OUT/f'rankings_{year}.csv',index=False)
-    row={'year':year,'weeks':len(sm),'pool_recall':sm.leader_in_pool.mean(),'top5':sm.leader_top5.mean(),'top10':sm.leader_top10.mean(),'top20':sm.leader_top20.mean(),'median_rank':sm.leader_rank.dropna().median(),'avg_portfolio_return':sm.portfolio_return.mean(),'avg_bist100_return':sm.bist100_return.mean(),'avg_alpha':sm.alpha.mean(),'weeks_beating_bist100':int((sm.alpha>0).sum()),'avg_priced_universe':sm.priced_universe.mean(),'kap_success_rate':sm.kap_ok.mean(),'note':'V7 frozen. Point-in-time XU100 reconstructed from 2019Q3 100-stock anchor + official periodic changes + 2020 ADANA/SARKY and GUSGR/TURSG transitions. Old/delisted tickers unavailable from TradingView are excluded and reported via avg_priced_universe.'}
+    row={'year':year,'weeks':len(sm),'pool_recall':sm.leader_in_pool.mean(),'top5':sm.leader_top5.mean(),'top10':sm.leader_top10.mean(),'top20':sm.leader_top20.mean(),'median_rank':sm.leader_rank.dropna().median(),'avg_portfolio_return':sm.portfolio_return.mean(),'avg_bist100_return':sm.bist100_return.mean(),'avg_alpha':sm.alpha.mean(),'weeks_beating_bist100':int((sm.alpha>0).sum()),'avg_priced_universe':sm.priced_universe.mean(),'kap_success_rate':sm.kap_ok.mean(),'note':'V7 frozen. Point-in-time XU100. Legacy same-security ticker aliases restored: DGKLB/DGNMO, ITTFH/LRSHO, GUSGR/TURSG, KOZAA/TRMET. Merger-terminated ADANA/ANACM/SODA/TRKCM are not falsely mapped to successor shares; residual missing coverage is reported.'}
     for rg in ['weak','strong']:
         z=sm[sm.regime==rg]; row[f'{rg}_weeks']=len(z); row[f'{rg}_top5']=z.leader_top5.mean() if len(z) else np.nan; row[f'{rg}_alpha']=z.alpha.mean() if len(z) else np.nan
     return row
@@ -86,7 +90,12 @@ def main():
     syms=ALL_SYMBOLS
     print('Historical symbol union',len(syms)); cache={}
     for i,s in enumerate(syms,1):
-        cache[s]=fetch_stock(s,'2018-11-01','2021-01-08')
+        d=fetch_stock(s,'2018-11-01','2021-01-08')
+        if (d is None or len(d)==0) and s in PRICE_ALIASES:
+            alias=PRICE_ALIASES[s]
+            d=fetch_stock(alias,'2018-11-01','2021-01-08')
+            print('ALIAS',s,'->',alias,'rows',0 if d is None else len(d))
+        cache[s]=d if d is not None else pd.DataFrame()
         if i%10==0:print('prices',i,'/',len(syms))
     bench=fetch_index('2018-11-01','2021-01-08'); stats=[]
     for y in [2019,2020]:stats.append(run_year(y,cache,bench))
