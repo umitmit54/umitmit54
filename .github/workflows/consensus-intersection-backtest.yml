@@ -1,0 +1,24 @@
+name: Consensus Intersection Backtest
+on:
+  push:
+    paths:
+      - 'bist-s4-backtest/consensus_intersection_backtest.py'
+      - '.github/workflows/consensus-intersection-backtest.yml'
+  workflow_dispatch:
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r bist-s4-backtest/requirements.txt
+      - name: Run consensus backtest
+        run: python bist-s4-backtest/consensus_intersection_backtest.py
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: consensus-intersection-results
+          path: bist-s4-backtest/output_consensus_intersection/
