@@ -1,0 +1,25 @@
+name: S5 V7 Regime Holdout 2021
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'bist-s4-backtest/s5_v7_regime_holdout_2021.py'
+      - '.github/workflows/s5-v7-regime-holdout-2021.yml'
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r bist-s4-backtest/requirements.txt
+      - name: Run frozen V7 2021 holdout
+        working-directory: bist-s4-backtest
+        run: python s5_v7_regime_holdout_2021.py
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: s5-v7-regime-2021-results
+          path: bist-s4-backtest/output_s5v7_regime_2021/
