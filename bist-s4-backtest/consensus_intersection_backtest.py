@@ -17,6 +17,7 @@ CASES=[
  {'id':'BT-2024MAR','entry':'2024-03-01','end':'2024-03-07','S1':'TUPRS;MGROS;SAHOL;TCELL;TAVHL','S2':'GUBRF;TAVHL;ARCLK;MGROS;FROTO','S3':'AKBNK;YKBNK;GARAN;ISCTR;TAVHL'},
  {'id':'BT-2025MAR','entry':'2025-03-03','end':'2025-03-07','S1':'TCELL;THYAO;MGROS;ASELS;BIMAS','S2':'ISCTR;ASELS;AKBNK;GARAN;YKBNK','S3':'ASELS;FROTO;GARAN;ISCTR;TAVHL'},
  {'id':'HIST-2026JUL','entry':'2026-07-31','end':'2026-08-07','S1':'TUPRS;ASTOR;ASELS;KCHOL;TCELL','S2':'EFOR;ODINE;BIMAS;EUPWR;AKSEN','S3':'TAVHL;GARAN;ANHYT;AKGRT;BIGCH'},
+ {'id':'CHK-002-2026AUG','entry':'2026-08-31','end':'2026-09-04','S1':'TUPRS;AKBNK;ASELS;ASTOR;TEHOL','S2':'TKFEN;BRSAN;GUBRF;TRALT;ALTNY','S3':'BIMAS;TAVHL;MPARK;KCHOL;CCOLA'},
 ]
 
 def universe():
@@ -24,13 +25,11 @@ def universe():
 
 def s5_rank(rows: pd.DataFrame, regime:str):
     cand=rows.copy()
-    # candidate gate matching frozen V7 family; if sparse, keep all valid rows
     gate=(cand.tech>=4)|(cand.reversal==1)|(cand.value1>=1.8)|(cand.value5>=1.4)
     if gate.sum()>=20: cand=cand[gate].copy()
     for col in ['ret20','ret3','flow10','value1','tech']:
         med=cand[col].median() if cand[col].notna().any() else 0
         cand[col+'_p']=pr(cand[col].replace([np.inf,-np.inf],np.nan).fillna(med))
-    # Event/flow fields unavailable in this compact historical cross-test => zero, renormalize observable weights.
     if regime=='weak':
         w={'ret20_p':.18,'ret3_p':.08,'flow10_p':.18,'value1_p':.12,'tech_p':.08}
     else:
@@ -88,8 +87,32 @@ def main():
     if details: pd.concat(details,ignore_index=True).to_csv(OUT/'rankings.csv',index=False)
     stats=[]
     for filt,col,ncol in [('S5_TOP10','s5_overlap_return','s5_n'),('S4_TOP10','s4_overlap_return','s4_n'),('S4_OR_S5','any_overlap_return','any_n'),('S4_AND_S5','both_overlap_return','both_n')]:
-        z=sm[sm[ncol]>0].copy();
-        stats.append({'filter':filt,'cases_with_overlap':len(z),'avg_overlap_n':z[ncol].mean() if len(z) else np.nan,'avg_filtered_return':z[col].mean() if len(z) else np.nan,'avg_original_return_same_rows':z.base_return.mean() if len(z) else np.nan,'avg_bist100_same_rows':z.bist100_return.mean() if len(z) else np.nan,'uplift_vs_original':(z[col]-z.base_return).mean() if len(z) else np.nan,'alpha_vs_bist100':(z[col]-z.bist100_return).mean() if len(z) else np.nan,'win_vs_original':(z[col]>z.base_return).mean() if len(z) else np.nan})
+        z=sm[sm[ncol]>0].copy()
+        stats.append({'filter':filt,'rows_with_overlap':len(z),'cases_with_overlap':z['case'].nunique() if len(z) else 0,'avg_overlap_n':z[ncol].mean() if len(z) else np.nan,'avg_filtered_return':z[col].mean() if len(z) else np.nan,'avg_original_return_same_rows':z.base_return.mean() if len(z) else np.nan,'avg_bist100_same_rows':z.bist100_return.mean() if len(z) else np.nan,'uplift_vs_original':(z[col]-z.base_return).mean() if len(z) else np.nan,'alpha_vs_bist100':(z[col]-z.bist100_return).mean() if len(z) else np.nan,'win_vs_original':(z[col]>z.base_return).mean() if len(z) else np.nan})
     pd.DataFrame(stats).to_csv(OUT/'stats.csv',index=False)
+
+    # A+ de-duplicated by case+symbol: candidate must belong to at least one original strategy basket AND be Top10 in both S4 and S5.
+    allr=pd.concat(details,ignore_index=True) if details else pd.DataFrame()
+    aplus=[]
+    if not allr.empty:
+        for c in CASES:
+            rr=allr[allr['case']==c['id']].copy()
+            if rr.empty: continue
+            both_syms=set(rr[(rr.s4_rank<=10)&(rr.s5_rank<=10)].symbol)
+            orig=set()
+            memberships={}
+            for strat in ['S1','S2','S3']:
+                for s in c[strat].split(';'):
+                    orig.add(s); memberships.setdefault(s,[]).append(strat)
+            picks=sorted(both_syms & orig)
+            for s in picks:
+                row=rr[rr.symbol==s].iloc[0]
+                aplus.append({'case':c['id'],'entry':c['entry'],'symbol':s,'strategies':'+'.join(memberships.get(s,[])),'s4_rank':int(row.s4_rank),'s5_rank':int(row.s5_rank),'week_return':float(row.week_return) if np.isfinite(row.week_return) else np.nan})
+    ap=pd.DataFrame(aplus); ap.to_csv(OUT/'aplus_candidates.csv',index=False)
+    if len(ap):
+        case_stats=ap.groupby('case').agg(aplus_n=('symbol','nunique'),aplus_return=('week_return','mean')).reset_index()
+    else:
+        case_stats=pd.DataFrame(columns=['case','aplus_n','aplus_return'])
+    case_stats.to_csv(OUT/'aplus_case_stats.csv',index=False)
 
 if __name__=='__main__': main()
