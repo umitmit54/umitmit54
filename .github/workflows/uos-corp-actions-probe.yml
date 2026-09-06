@@ -1,0 +1,28 @@
+name: UOS Corporate Actions Probe
+on:
+  push:
+    branches: [uos-data-collector-20260906]
+    paths:
+      - 'uos-data-collector/probe_corporate_actions.py'
+      - '.github/workflows/uos-corp-actions-probe.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --upgrade pip requests
+      - run: python uos-data-collector/probe_corporate_actions.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: UOS_CORP_ACTIONS_PROBE
+          path: uos-data-collector/corp_probe/
+          if-no-files-found: warn
+          retention-days: 7
