@@ -5,7 +5,7 @@ import yfinance as yf
 
 OUT=Path('uos-ittfh-lrsho-yahoo'); OUT.mkdir(parents=True,exist_ok=True)
 status={}
-for ticker in ['ITTFH.IS','LRSHO.IS','ERBOS.IS','ENKAI.IS','LMKDC.IS']:
+for ticker in ['ITTFH.IS','LRSHO.IS','ERBOS.IS','ENKAI.IS','LMKDC.IS','KUYAS.IS','OYAKC.IS','MRDIN.IS']:
     try:
         df=yf.download(ticker,start='2018-01-01',end='2026-09-06',auto_adjust=False,actions=True,progress=False,threads=False)
         if isinstance(df.columns,pd.MultiIndex):
