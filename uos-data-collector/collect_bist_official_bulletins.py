@@ -5,6 +5,7 @@ import pandas as pd
 import requests
 
 BASE='https://www.borsaistanbul.com/data/thb/{y}/{m:02d}/thb{y}{m:02d}{d:02d}1.zip'
+EXTRA_OFFICIAL_CODE_CHANGES={'DGNMO','EFOR','TRENJ','LRSHO','BESLR','TRMET','TRALT'}
 NUMERIC_MAP={
  'ONCEKI KAPANIS FIYATI':'prev_close','ACILIS FIYATI':'open','EN DUSUK FIYAT':'low',
  'EN YUKSEK FIYAT':'high','KAPANIS FIYATI':'close','A.O.F':'vwap',
@@ -31,7 +32,7 @@ def decode_csv(b):
 
 def main():
  a=parse_args(); out=Path(a.out); out.mkdir(parents=True,exist_ok=True)
- symbols=set(json.loads((Path(__file__).parent/'symbols_2019_2026.json').read_text()))
+ symbols=set(json.loads((Path(__file__).parent/'symbols_2019_2026.json').read_text())) | EXTRA_OFFICIAL_CODE_CHANGES
  sess=requests.Session(); sess.headers.update({'User-Agent':'Mozilla/5.0 UOS research collector'})
  raw_parts=[]; norm_parts=[]; manifest=[]
  for i,d in enumerate(daterange(a.year),1):
@@ -56,8 +57,6 @@ def main():
    f=df[df['instrument_id'].isin(symbols)].copy()
    rec['rows_all']=len(df); rec['rows_union']=len(f); rec['status']='OK'; manifest.append(rec)
    if f.empty: continue
-   # The URL filename encodes the authoritative bulletin date. Source TARIH formatting changed
-   # across years (ISO / DD-MM-YYYY), so do not let locale parsing silently swap day/month.
    f.insert(0,'source_date',d.isoformat()); f['source_url']=url; f['source_zip_sha256']=rec['sha256']; raw_parts.append(f)
    n=pd.DataFrame({'date':[d.isoformat()]*len(f),'instrument_id':f['instrument_id'].to_numpy()})
    for src,dst in NUMERIC_MAP.items(): n[dst]=pd.to_numeric(f[src],errors='coerce').to_numpy() if src in f.columns else pd.NA
