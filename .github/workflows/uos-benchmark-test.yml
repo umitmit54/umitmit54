@@ -1,0 +1,28 @@
+name: UOS Benchmark Return Index Probe
+on:
+  push:
+    branches: [uos-data-collector-20260906]
+    paths:
+      - 'uos-benchmark/**'
+      - '.github/workflows/uos-benchmark-test.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --upgrade pip pandas yfinance
+      - run: python uos-benchmark/test_return_index.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: UOS_BENCHMARK_PROBE
+          path: uos-benchmark/output/
+          if-no-files-found: warn
+          retention-days: 14
