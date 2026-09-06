@@ -1,0 +1,31 @@
+name: UOS BIST Official Bulletins
+on:
+  push:
+    branches: [uos-data-collector-20260906]
+    paths:
+      - 'uos-data-collector/collect_bist_official_bulletins.py'
+      - '.github/workflows/uos-bist-official-bulletins.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  collect:
+    strategy:
+      fail-fast: false
+      matrix:
+        year: [2018,2019,2020,2021,2022,2023,2024,2025,2026]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --upgrade pip pandas requests
+      - run: python uos-data-collector/collect_bist_official_bulletins.py --year ${{ matrix.year }} --out uos-bist-official-${{ matrix.year }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: UOS_BIST_OFFICIAL_${{ matrix.year }}
+          path: uos-bist-official-${{ matrix.year }}/
+          retention-days: 7
+          if-no-files-found: error
