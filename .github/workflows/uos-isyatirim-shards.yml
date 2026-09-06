@@ -1,0 +1,28 @@
+name: UOS IsYatirim Shards
+on:
+  push:
+    branches: [uos-data-collector-20260906]
+    paths:
+      - 'uos-data-collector/collect_isyatirim_shard.py'
+      - '.github/workflows/uos-isyatirim-shards.yml'
+  workflow_dispatch:
+jobs:
+  collect:
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --upgrade pip pandas
+      - run: python uos-data-collector/collect_isyatirim_shard.py --shard-index ${{ matrix.shard }} --shard-count 3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: UOS_ISYATIRIM_SHARD_${{ matrix.shard }}
+          path: uos-data-collector/isyatirim_shard_${{ matrix.shard }}
+          retention-days: 14
+          compression-level: 6
