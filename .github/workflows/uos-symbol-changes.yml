@@ -1,0 +1,26 @@
+name: UOS Symbol Changes
+on:
+  push:
+    branches: [uos-data-collector-20260906]
+    paths:
+      - 'uos-data-collector/parse_bist_symbol_changes.py'
+      - '.github/workflows/uos-symbol-changes.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  parse:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --upgrade pip pandas requests xlrd
+      - run: python uos-data-collector/parse_bist_symbol_changes.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: UOS_BIST_SYMBOL_CHANGES
+          path: uos-symbol-changes/
+          retention-days: 7
