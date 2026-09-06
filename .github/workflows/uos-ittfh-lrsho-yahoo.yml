@@ -1,0 +1,27 @@
+name: UOS ITTFH LRSHO Yahoo Probe
+on:
+  push:
+    branches: [uos-data-collector-20260906]
+    paths:
+      - 'uos-data-collector/probe_ittfh_lrsho_yahoo.py'
+      - '.github/workflows/uos-ittfh-lrsho-yahoo.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --upgrade pip pandas yfinance
+      - run: python uos-data-collector/probe_ittfh_lrsho_yahoo.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: UOS_ITTFH_LRSHO_YAHOO
+          path: uos-ittfh-lrsho-yahoo/
+          retention-days: 7
+          if-no-files-found: error
