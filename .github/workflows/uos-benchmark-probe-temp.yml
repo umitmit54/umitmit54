@@ -2,7 +2,9 @@ name: UOS Benchmark Probe TEMP
 on:
   push:
     branches: [main]
-    paths: ['.github/workflows/uos-benchmark-probe-temp.yml']
+    paths:
+      - '.github/workflows/uos-benchmark-probe-temp.yml'
+      - 'uos-benchmark-probe-temp.py'
 permissions:
   contents: read
 jobs:
