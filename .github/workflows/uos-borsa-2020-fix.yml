@@ -1,0 +1,60 @@
+name: UOS Borsa 2020 Fix
+on:
+  push:
+    branches: [uos-borsa-data-job]
+    paths: ['.github/workflows/uos-borsa-2020-fix.yml']
+  workflow_dispatch:
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: pip install -q pandas requests websocket-client git+https://github.com/rongardF/tvdatafeed.git
+      - run: |
+          python - <<'PY'
+          import io,time,zipfile,json,os
+          from concurrent.futures import ThreadPoolExecutor,as_completed
+          import pandas as pd,requests
+          from tvDatafeed import TvDatafeed,Interval
+          y=2020; tv=TvDatafeed(); bx=tv.get_hist(symbol='XU100',exchange='BIST',interval=Interval.in_daily,n_bars=5000)
+          if bx is None or bx.empty: raise RuntimeError('benchmark_empty')
+          bx=bx.reset_index(); bx['date']=pd.to_datetime(bx.iloc[:,0],errors='coerce').dt.strftime('%Y-%m-%d'); bx=bx[(bx.date>='2020-01-01')&(bx.date<='2020-12-31')]
+          exp=sorted(set(bx.date.dropna())); print('benchmark_days',len(exp))
+          def f(ds):
+            d=pd.Timestamp(ds); u=f'https://borsaistanbul.com/data/thb/{d:%Y}/{d:%m}/thb{d:%Y%m%d}1.zip'
+            try:
+              r=requests.get(u,timeout=20,headers={'User-Agent':'Mozilla/5.0 UOS-Borsa-Research/1.0'}); return ds,(r.content if r.status_code==200 and r.content[:2]==b'PK' else None),r.status_code
+            except Exception as e:return ds,None,'ERR:'+type(e).__name__
+          got={};status={};pending=set(exp)
+          for a in range(1,7):
+            if not pending:break
+            with ThreadPoolExecutor(max_workers=8) as ex:
+              for z in as_completed([ex.submit(f,d) for d in sorted(pending)]):
+                ds,b,s=z.result();status[ds]=s
+                if b is not None:got[ds]=b
+            pending=set(exp)-set(got);print('attempt',a,'pending',len(pending),flush=True)
+            if pending:time.sleep(a*2)
+          frames=[];errs=[]
+          for ds,b in sorted(got.items()):
+            try:
+              with zipfile.ZipFile(io.BytesIO(b)) as z: raw=z.read([n for n in z.namelist() if n.lower().endswith('.csv')][0])
+              text=raw.decode('cp1254',errors='replace');lines=text.splitlines();skip=1 if len(lines)>1 and lines[1].startswith('TRADE DATE;') else 0
+              d=pd.read_csv(io.StringIO(text),sep=';',skiprows=skip,low_memory=False)
+              req=['TRADE DATE','INSTRUMENT SERIES CODE','INSTRUMENT NAME','INSTRUMENT GROUP','BIST 100 INDEX','OPENING PRICE','LOWEST PRICE','HIGHEST PRICE','CLOSING PRICE','TOTAL TRADED VOLUME','TOTAL TRADED VALUE']; miss=[c for c in req if c not in d.columns]
+              if miss: raise ValueError('missing_columns:'+','.join(miss))
+              q=d[(d['INSTRUMENT GROUP'].astype(str).str.strip()=='EQT')&d['INSTRUMENT SERIES CODE'].astype(str).str.endswith('.E')].copy();
+              if q.empty: raise ValueError('no_equity_rows')
+              frames.append(pd.DataFrame({'date':pd.to_datetime(q['TRADE DATE'],errors='coerce',dayfirst=True).dt.strftime('%Y-%m-%d'),'symbol':q['INSTRUMENT SERIES CODE'].astype(str).str.replace(r'\.E$','',regex=True),'name':q['INSTRUMENT NAME'].astype(str).str.strip(),'open':pd.to_numeric(q['OPENING PRICE'],errors='coerce'),'high':pd.to_numeric(q['HIGHEST PRICE'],errors='coerce'),'low':pd.to_numeric(q['LOWEST PRICE'],errors='coerce'),'close':pd.to_numeric(q['CLOSING PRICE'],errors='coerce'),'volume':pd.to_numeric(q['TOTAL TRADED VOLUME'],errors='coerce'),'turnover_try':pd.to_numeric(q['TOTAL TRADED VALUE'],errors='coerce'),'bist100_pit':pd.to_numeric(q['BIST 100 INDEX'],errors='coerce').fillna(0).astype('int8'),'source':'BIST_thb_'+pd.Timestamp(ds).strftime('%Y%m%d')+'1'}))
+            except Exception as e:errs.append((ds,str(e)))
+          os.makedirs('out',exist_ok=True); p=pd.concat(frames,ignore_index=True).dropna(subset=['date','symbol']).sort_values(['date','symbol']);dups=int(p.duplicated(['date','symbol']).sum());p=p.drop_duplicates(['date','symbol'],keep='last')
+          bad=p[(p.high<p[['open','close','low']].max(axis=1))|(p.low>p[['open','close','high']].min(axis=1))];miss=sorted(set(exp)-set(p.date.unique()));counts=p[p.bist100_pit==1].groupby('date').symbol.nunique()
+          p.to_csv('out/BIST_EQUITY_OHLCV_2020.csv.gz',index=False,compression='gzip'); bx[['date','open','high','low','close','volume']].to_csv('out/XU100_PRICE_OHLC_2020.csv',index=False)
+          pd.DataFrame([{'date':d,'http_status':status.get(d),'downloaded':d in got} for d in exp]).to_csv('out/BULLETIN_MANIFEST_2020.csv',index=False);pd.DataFrame({'date':miss}).to_csv('out/MISSING_2020.csv',index=False);pd.DataFrame(errs,columns=['date','error']).to_csv('out/PARSE_ERRORS_2020.csv',index=False)
+          rep={'year':2020,'expected_benchmark_dates':len(exp),'official_bulletins_downloaded':len(got),'equity_trading_dates':int(p.date.nunique()),'rows':int(len(p)),'symbols':int(p.symbol.nunique()),'missing_dates':len(miss),'parse_errors':len(errs),'duplicate_rows_before_dedup':dups,'ohlc_invariant_errors':int(len(bad)),'bist100_count_min':int(counts.min()) if len(counts) else None,'bist100_count_max':int(counts.max()) if len(counts) else None}; rep['year_complete']=not miss and not errs and len(bad)==0 and len(p)>0
+          open('out/QUALITY_2020.json','w').write(json.dumps(rep,ensure_ascii=False,indent=2));print(json.dumps(rep,ensure_ascii=False),flush=True)
+          if not rep['year_complete']:raise RuntimeError('year_gate_failed')
+          PY
+      - uses: actions/upload-artifact@v4
+        with: {name: bist-2016v2-2020-fixed, path: out/, retention-days: 30}
