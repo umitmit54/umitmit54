@@ -1,0 +1,26 @@
+name: UOS Borsa Old Benchmark Probe
+on:
+  push:
+    branches: [uos-borsa-data-job]
+    paths: ['.github/workflows/uos-borsa-old-benchmark-probe.yml']
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: pip install -q pandas websocket-client git+https://github.com/rongardF/tvdatafeed.git
+      - run: |
+          python - <<'PY'
+          import pandas as pd
+          from tvDatafeed import TvDatafeed, Interval
+          tv=TvDatafeed()
+          for s in ['XU100_CFNNTLTL','XU100','XU100_CFNNTL','XU100_CFNNTL2']:
+            try:
+              x=tv.get_hist(symbol=s,exchange='BIST',interval=Interval.in_daily,n_bars=5000)
+              if x is None or x.empty: print(s,'EMPTY'); continue
+              z=x.reset_index(); d=pd.to_datetime(z.iloc[:,0],errors='coerce')
+              print(s,'rows',len(z),'min',d.min(),'max',d.max(),'cols',list(z.columns))
+            except Exception as e: print(s,'ERR',repr(e))
+          PY
