@@ -1,0 +1,162 @@
+name: UOS Borsa 2016-2020 Canonical
+on:
+  push:
+    branches: [uos-borsa-data-job]
+    paths: ['.github/workflows/uos-borsa-2016-2020.yml']
+  workflow_dispatch:
+
+jobs:
+  collect-year:
+    strategy:
+      fail-fast: false
+      matrix:
+        year: [2016, 2017, 2018, 2019, 2020]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: pip install -q pandas requests websocket-client git+https://github.com/rongardF/tvdatafeed.git
+      - name: Collect expected trading days from XU100 and official BIST bulletins
+        env:
+          YEAR: ${{ matrix.year }}
+        run: |
+          cat > /tmp/c.py <<'PY'
+          import io, os, time, zipfile, json
+          from concurrent.futures import ThreadPoolExecutor, as_completed
+          import pandas as pd, requests
+          from tvDatafeed import TvDatafeed, Interval
+
+          y=int(os.environ['YEAR'])
+          tv=TvDatafeed()
+          bx=tv.get_hist(symbol='XU100_CFNNTLTL',exchange='BIST',interval=Interval.in_daily,n_bars=4000)
+          if bx is None or bx.empty: raise RuntimeError('benchmark_empty')
+          bx=bx.reset_index(); bx['date']=pd.to_datetime(bx.iloc[:,0],errors='coerce').dt.strftime('%Y-%m-%d')
+          bx=bx[(bx.date>=f'{y}-01-01') & (bx.date<=f'{y}-12-31')]
+          expected=sorted(set(bx.date.dropna()))
+          if not expected: raise RuntimeError('no_expected_trading_dates')
+
+          def fetch(ds):
+            d=pd.Timestamp(ds)
+            u=f'https://borsaistanbul.com/data/thb/{d:%Y}/{d:%m}/thb{d:%Y%m%d}1.zip'
+            try:
+              r=requests.get(u,timeout=20,headers={'User-Agent':'Mozilla/5.0 UOS-Borsa-Research/1.0'})
+              if r.status_code==200 and r.content[:2]==b'PK': return ds,r.content,200
+              return ds,None,r.status_code
+            except Exception as e: return ds,None,'ERR:'+type(e).__name__
+
+          fetched={}; last_status={}; pending=set(expected)
+          for attempt in range(1,7):
+            if not pending: break
+            print('attempt',attempt,'pending',len(pending),flush=True)
+            with ThreadPoolExecutor(max_workers=8) as ex:
+              fs=[ex.submit(fetch,ds) for ds in sorted(pending)]
+              for f in as_completed(fs):
+                ds,b,s=f.result(); last_status[ds]=s
+                if b is not None: fetched[ds]=b
+            pending=set(expected)-set(fetched)
+            if pending: time.sleep(attempt*2)
+
+          frames=[]; errs=[]
+          for ds in sorted(fetched):
+            b=fetched[ds]
+            try:
+              with zipfile.ZipFile(io.BytesIO(b)) as z:
+                names=[n for n in z.namelist() if n.lower().endswith('.csv')]
+                if not names: raise ValueError('zip_no_csv')
+                raw=z.read(names[0])
+              text=raw.decode('cp1254',errors='replace'); lines=text.splitlines()
+              skip=1 if len(lines)>1 and lines[1].startswith('TRADE DATE;') else 0
+              df=pd.read_csv(io.StringIO(text),sep=';',skiprows=skip,low_memory=False)
+              req=['TRADE DATE','INSTRUMENT SERIES CODE','INSTRUMENT NAME','INSTRUMENT GROUP','BIST 100 INDEX','OPENING PRICE','LOWEST PRICE','HIGHEST PRICE','CLOSING PRICE','TOTAL TRADED VOLUME','TOTAL TRADED VALUE']
+              miss=[c for c in req if c not in df.columns]
+              if miss: raise ValueError('missing_columns:'+','.join(miss))
+              q=df[(df['INSTRUMENT GROUP'].astype(str).str.strip()=='EQT') & df['INSTRUMENT SERIES CODE'].astype(str).str.endswith('.E')].copy()
+              if q.empty: raise ValueError('no_equity_rows')
+              out=pd.DataFrame({
+                'date':pd.to_datetime(q['TRADE DATE'],errors='coerce').dt.strftime('%Y-%m-%d'),
+                'symbol':q['INSTRUMENT SERIES CODE'].astype(str).str.replace(r'\.E$','',regex=True),
+                'name':q['INSTRUMENT NAME'].astype(str).str.strip(),
+                'open':pd.to_numeric(q['OPENING PRICE'],errors='coerce'),
+                'high':pd.to_numeric(q['HIGHEST PRICE'],errors='coerce'),
+                'low':pd.to_numeric(q['LOWEST PRICE'],errors='coerce'),
+                'close':pd.to_numeric(q['CLOSING PRICE'],errors='coerce'),
+                'volume':pd.to_numeric(q['TOTAL TRADED VOLUME'],errors='coerce'),
+                'turnover_try':pd.to_numeric(q['TOTAL TRADED VALUE'],errors='coerce'),
+                'bist100_pit':pd.to_numeric(q['BIST 100 INDEX'],errors='coerce').fillna(0).astype('int8'),
+                'source':'BIST_thb_'+pd.Timestamp(ds).strftime('%Y%m%d')+'1'})
+              frames.append(out)
+            except Exception as e: errs.append((ds,str(e)))
+
+          os.makedirs('out',exist_ok=True)
+          panel=pd.concat(frames,ignore_index=True).dropna(subset=['date','symbol']).sort_values(['date','symbol']) if frames else pd.DataFrame()
+          if panel.empty: raise RuntimeError('equity_panel_empty')
+          dups=int(panel.duplicated(['date','symbol']).sum()); panel=panel.drop_duplicates(['date','symbol'],keep='last')
+          bad=panel[(panel['high']<panel[['open','close','low']].max(axis=1)) | (panel['low']>panel[['open','close','high']].min(axis=1))]
+          counts=panel[panel.bist100_pit==1].groupby('date').symbol.nunique()
+          missing=sorted(set(expected)-set(panel.date.unique()))
+          panel.to_csv(f'out/BIST_EQUITY_OHLCV_{y}.csv.gz',index=False,compression='gzip')
+          bx[['date','open','high','low','close','volume']].to_csv(f'out/XU100_RETURN_OHLC_{y}.csv',index=False)
+          pd.DataFrame([{'date':d,'http_status':last_status.get(d),'downloaded':d in fetched} for d in expected]).to_csv(f'out/BULLETIN_MANIFEST_{y}.csv',index=False)
+          pd.DataFrame({'date':missing}).to_csv(f'out/MISSING_BULLETIN_DATES_{y}.csv',index=False)
+          pd.DataFrame(errs,columns=['date','error']).to_csv(f'out/PARSE_ERRORS_{y}.csv',index=False)
+          rep={'year':y,'expected_benchmark_dates':len(expected),'official_bulletins_downloaded':len(fetched),'equity_trading_dates':int(panel.date.nunique()),'rows':int(len(panel)),'symbols':int(panel.symbol.nunique()),'missing_dates':len(missing),'parse_errors':len(errs),'duplicate_rows_before_dedup':dups,'ohlc_invariant_errors':int(len(bad)),'bist100_count_min':int(counts.min()) if len(counts) else None,'bist100_count_max':int(counts.max()) if len(counts) else None}
+          rep['year_complete']=bool(len(missing)==0 and len(errs)==0 and len(bad)==0 and len(panel)>0)
+          open(f'out/QUALITY_{y}.json','w').write(json.dumps(rep,ensure_ascii=False,indent=2)); print(json.dumps(rep,ensure_ascii=False),flush=True)
+          if not rep['year_complete']: raise RuntimeError('year_quality_gate_failed:'+json.dumps(rep))
+          PY
+          python /tmp/c.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bist-old-${{ matrix.year }}
+          path: out/
+          retention-days: 30
+
+  combine:
+    needs: collect-year
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: pip install -q pandas
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bist-old-*
+          path: all
+      - name: Build canonical package and enforce final gate
+        run: |
+          python - <<'PY'
+          import glob,json,os,hashlib
+          import pandas as pd
+          os.makedirs('final',exist_ok=True)
+          pf=glob.glob('all/**/BIST_EQUITY_OHLCV_*.csv.gz',recursive=True)
+          p=pd.concat([pd.read_csv(f) for f in pf],ignore_index=True).sort_values(['date','symbol']).drop_duplicates(['date','symbol'],keep='last')
+          bf=glob.glob('all/**/XU100_RETURN_OHLC_*.csv',recursive=True)
+          b=pd.concat([pd.read_csv(f) for f in bf],ignore_index=True).sort_values('date').drop_duplicates('date',keep='last')
+          reps=sorted([json.load(open(f)) for f in glob.glob('all/**/QUALITY_*.json',recursive=True)],key=lambda r:r['year'])
+          missing=sorted(set(b.date)-set(p.date)); extra=sorted(set(p.date)-set(b.date))
+          p.to_csv('final/BIST_EQUITY_OHLCV_2016-01-01_2020-12-31.csv.gz',index=False,compression='gzip')
+          b.insert(1,'symbol','XU100_CFNNTLTL'); b['source']='TradingView:BIST:XU100_CFNNTLTL'
+          b.to_csv('final/XU100_RETURN_OHLC_2016-01-01_2020-12-31.csv',index=False)
+          mans=glob.glob('all/**/BULLETIN_MANIFEST_*.csv',recursive=True)
+          pd.concat([pd.read_csv(f) for f in mans],ignore_index=True).sort_values('date').to_csv('final/BULLETIN_DOWNLOAD_MANIFEST.csv',index=False)
+          pd.DataFrame({'date':missing}).to_csv('final/TRUE_MISSING_BULLETIN_DATES.csv',index=False)
+          pd.DataFrame({'date':extra}).to_csv('final/BENCHMARK_GAP_DATES.csv',index=False)
+          errs=glob.glob('all/**/PARSE_ERRORS_*.csv',recursive=True)
+          ee=pd.concat([pd.read_csv(f) for f in errs],ignore_index=True) if errs else pd.DataFrame(columns=['date','error'])
+          ee.to_csv('final/PARSE_ERRORS.csv',index=False)
+          rep={'period':['2016-01-01','2020-12-31'],'equity_rows':int(len(p)),'equity_trading_dates':int(p.date.nunique()),'unique_symbols':int(p.symbol.nunique()),'benchmark_rows':int(len(b)),'missing_bulletin_dates_vs_benchmark':len(missing),'benchmark_gap_dates':len(extra),'parse_error_rows':int(len(ee)),'years':reps}
+          rep['complete_gate']=bool(len(p)>0 and len(b)==int(p.date.nunique()) and not missing and not extra and len(ee)==0 and all(r['year_complete'] for r in reps))
+          open('final/QUALITY_REPORT.json','w').write(json.dumps(rep,ensure_ascii=False,indent=2))
+          checks={}
+          for f in glob.glob('final/*'):
+            checks[os.path.basename(f)]=hashlib.sha256(open(f,'rb').read()).hexdigest()
+          open('final/SHA256SUMS.json','w').write(json.dumps(checks,indent=2))
+          print(json.dumps(rep,ensure_ascii=False,indent=2))
+          if not rep['complete_gate']: raise SystemExit('FINAL QUALITY GATE FAILED')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: UOS_BORSA_2016_2020_CANONICAL
+          path: final/
+          retention-days: 30
