@@ -1,0 +1,24 @@
+name: UOS Borsa Probe
+on:
+  push:
+    branches: [uos-borsa-data-job]
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download sample bulletin
+        run: |
+          set -euxo pipefail
+          URL="https://borsaistanbul.com/data/thb/2023/07/thb202307281.zip"
+          curl -L --fail --retry 3 --connect-timeout 20 "$URL" -o /tmp/bist.zip
+          unzip -l /tmp/bist.zip
+          mkdir -p /tmp/bist
+          unzip -o /tmp/bist.zip -d /tmp/bist
+          find /tmp/bist -type f -maxdepth 2 -print
+          for f in /tmp/bist/*; do
+            echo "===== $f ====="
+            file "$f" || true
+            iconv -f WINDOWS-1254 -t UTF-8 "$f" 2>/dev/null | head -n 40 || head -n 40 "$f" || true
+          done
