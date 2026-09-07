@@ -1,0 +1,37 @@
+name: UOS Borsa Full 2021-2026
+on:
+  push:
+    branches: [uos-borsa-data-job]
+    paths:
+      - 'uos_borsa_data_job/**'
+      - '.github/workflows/uos-borsa-full.yml'
+  workflow_dispatch:
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas requests websocket-client
+          pip install --upgrade --no-cache-dir git+https://github.com/rongardF/tvdatafeed.git
+      - name: Collect official BIST OHLCV and XU100 return benchmark
+        run: python uos_borsa_data_job/collect_2021_2026.py
+      - name: Show quality report
+        if: always()
+        run: |
+          cat uos_borsa_output/QUALITY_REPORT.json || true
+          ls -lh uos_borsa_output || true
+      - name: Upload UOS Borsa dataset artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: UOS_BORSA_2021_2026_OHLCV_XU100
+          path: uos_borsa_output/
+          retention-days: 30
+          if-no-files-found: error
