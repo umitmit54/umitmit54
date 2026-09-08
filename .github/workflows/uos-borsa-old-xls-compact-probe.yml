@@ -1,0 +1,35 @@
+name: UOS Borsa Old XLS Compact Probe
+on:
+  push:
+    branches: [uos-borsa-data-job]
+    paths: ['.github/workflows/uos-borsa-old-xls-compact-probe.yml']
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: pip install -q requests xlrd pandas
+      - run: |
+          python - <<'PY'
+          import io,zipfile,requests,xlrd,pandas as pd
+          for ds in ['2012-01-03','2014-01-02','2015-01-02']:
+            d=pd.Timestamp(ds); u=f'https://borsaistanbul.com/data/thb/{d:%Y}/{d:%m}/thb{d:%Y%m%d}1.zip'
+            r=requests.get(u,timeout=30,headers={'User-Agent':'Mozilla/5.0 UOS-Probe'})
+            print('\n===',ds,'HTTP',r.status_code,'===')
+            with zipfile.ZipFile(io.BytesIO(r.content)) as z:
+              name=z.namelist()[0]; raw=z.read(name)
+            wb=xlrd.open_workbook(file_contents=raw)
+            print('sheets=',wb.sheet_names())
+            for shn in wb.sheet_names():
+              sh=wb.sheet_by_name(shn)
+              print('SHEET',shn,'rows',sh.nrows,'cols',sh.ncols)
+              for rr in range(min(18,sh.nrows)):
+                vals=[]
+                for cc in range(min(35,sh.ncols)):
+                  v=sh.cell_value(rr,cc)
+                  if v not in ('',None): vals.append(f'c{cc}={v!r}')
+                if vals: print('r'+str(rr)+':',' | '.join(vals))
+          PY
