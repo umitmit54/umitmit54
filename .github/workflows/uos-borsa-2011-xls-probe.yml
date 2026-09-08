@@ -1,0 +1,27 @@
+name: UOS Borsa 2011 XLS Probe
+on:
+  push:
+    branches: [uos-borsa-data-job]
+    paths: ['.github/workflows/uos-borsa-2011-xls-probe.yml']
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: pip install -q pandas requests xlrd
+      - run: |
+          python - <<'PY'
+          import io,zipfile,requests,pandas as pd
+          for ds in ['20110103','20110615','20111230']:
+            u=f'https://borsaistanbul.com/data/thb/{ds[:4]}/{ds[4:6]}/thb{ds}1.zip'
+            r=requests.get(u,timeout=30,headers={'User-Agent':'Mozilla/5.0'})
+            print('\nURL',u,'status',r.status_code,'zip',r.content[:2])
+            with zipfile.ZipFile(io.BytesIO(r.content)) as z:
+              n=z.namelist()[0]; raw=z.read(n); print('name',n,'bytes',len(raw))
+            xls=pd.ExcelFile(io.BytesIO(raw),engine='xlrd'); print('sheets',xls.sheet_names)
+            for sh in xls.sheet_names[:3]:
+              d=pd.read_excel(io.BytesIO(raw),sheet_name=sh,header=None,engine='xlrd')
+              print('SHEET',sh,'shape',d.shape); print(d.head(15).to_string(index=False,header=False))
+          PY
