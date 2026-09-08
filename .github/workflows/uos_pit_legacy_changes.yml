@@ -1,0 +1,41 @@
+name: UOS Legacy PIT Change Ledger
+on:
+  workflow_dispatch:
+  push:
+    paths: ['.github/workflows/uos_pit_legacy_changes.yml']
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Build sourced change ledger
+        shell: python
+        run: |
+          import csv, os
+          rows=[]
+          def add(d,inc,exc,src,status='official'):
+              for x in inc: rows.append([d,'IN',x,src,status])
+              for x in exc: rows.append([d,'OUT',x,src,status])
+          add('2012-01-01',['TURCAS PETROL','DEVA HOLDING','RHEA GIRISIM','MUTLU AKU'],['ZORLU ENERJI','T. EKONOMI BANK.','OMV PETROL OFISI','ANEL ELEKTRIK'],'https://kap.org.tr/tr/api/file/download/33E834374743023CE0530A4A622B5826')
+          add('2012-04-01',['SAF GMYO','CEMAS DOKUM','VESTEL'],['DO-CO RESTAURANTS','ADANA CIMENTO (C)','ULKER BISKUVI'],'https://kap.org.tr/tr/api/file/download/33E8343736DD023CE0530A4A622B5826')
+          add('2012-07-01',['ULKER BISKUVI'],['AKFEN HOLDING'],'https://kap.org.tr/en/api/file/download/33E83437448A023CE0530A4A622B5826')
+          add('2013-01-01',['AKFEN HOLDING','CELEBI','ALBARAKA TURK','ALKIM KIMYA','ANADOLU ISUZU','ALARKO GMYO','T. EKONOMI BANK'],['ISIKLAR YAT. HOLDING','DEVA HOLDING','GOLDAS KUYUMCULUK','GLOBAL YAT. HOLDING','NET TURIZM','MUTLU AKU','AKSA ENERJI'],'https://www.borsaistanbul.com/datum/duyuru_ekleri/Genel%20Mektup%203995.pdf')
+          add('2013-04-01',['TAT KONSERVE','YAZICILAR HOLDING','TEKNOSA IC VE DIS TICARET','OMV PETROL OFISI','AKSA ENERJI','ANEL ELEKTRIK'],['BOYNER MAGAZACILIK','RHEA GIRISIM','CEMAS DOKUM','TRABZONSPOR SPORTIF','KILER GMYO','MENDERES TEKSTIL'],'https://www.borsaistanbul.com/datum/duyuru_ekleri/Genel_Mektup4019.pdf')
+          add('2013-07-01',['HALK GMYO','ANADOLU CAM','TEKSTILBANK','CIMSA','MUTLU AKU','GLOBAL YAT. HOLDING'],['SAF GMYO','EGE ENDUSTRI','IS FIN.KIR.','ALBARAKA TURK','EGE GUBRE','MONDI TIRE KUTSAN'],'https://www.borsaistanbul.com/en/announcement/13817/list-equities-included-bist-equity-indices-third-quarter-2013-has-been-changed')
+          add('2013-10-01',['PEGASUS','NET TURIZM'],['ANADOLU SIGORTA','BANVIT'],'https://www.borsaistanbul.com/duyuru/12137/2013-yili-dorduncu-uc-aylik-donemi-icin-bist-pay-endeksleri-kapsaminda-yer-alacak-paylarda-degisiklik-yapilmistir')
+          add('2014-01-02',['TUMOSAN MOTOR VE TRAKTOR','BIMEKS','AKCANSA'],['TAT KONSERVE','GLOBAL YAT. HOLDING','NET HOLDING'],'https://www.borsaistanbul.com/en/announcement/13746/list-equities-included-bist-equity-indices-first-quarter-2014-has-been-changed')
+          add('2014-04-01',['DOGUS GMYO','VAKIF GMYO','SODA SANAYII'],['T.EKONOMI BANK.','SEKERBANK','AKCANSA'],'https://www.borsaistanbul.com/en/announcement/13738/list-equities-included-bist-equity-indices-second-quarter-2014-has-been-changed')
+          add('2014-07-01',['SAF GMYO','LOGO YAZILIM','EGE ENDUSTRI'],['MUTLU AKU','ANEL ELEKTRIK','IHLAS EV ALETLERI'],'https://borsaistanbul.com/en/announcement/13720/list-equities-included-bist-equity-indices-third-quarter-2014-has-been-changed')
+          add('2014-10-01',['SEKERBANK','TAT GIDA','FINANSBANK'],['AKFEN HOLDING','ANADOLU HAYAT EMEK.','BIMEKS'],'https://borsaistanbul.com/en/announcement/13705/list-equities-included-bist-equity-indices-fourth-quarter-2014-has-been-changed')
+          add('2015-01-02',['ALBARAKA TURK','VESTEL BEYAZ ESYA','NET HOLDING'],['FINANSBANK','OMV PETROL OFISI','DOGUS GMYO'],'https://www.borsaistanbul.com/en/announcement/13666/list-equities-included-bist-equity-indices-first-quarter-2015-has-been-changed')
+          add('2015-04-01',['AVIVASA EMEKLILIK HAYAT','GLOBAL YAT. HOLDING','ODAS ELEKTRIK','ADEL KALEMCILIK','ERBOSAN'],['LOGO YAZILIM','ITTIFAK HOLDING','NET HOLDING','IZMIR DEMIR CELIK','TESCO KIPA'],'https://www.borsaistanbul.com/en/announcement/13622/list-equities-included-bist-equity-indices-second-quarter-2015-has-been-changed')
+          add('2015-07-01',['KORDSA GLOBAL','DEVA HOLDING','ALCATEL LUCENT TELETAS'],['MENDERES TEKSTIL','SEKERBANK','ANADOLU ISUZU'],'https://borsaistanbul.com/en/announcement/13559/bist-equity-indices-constituent-equities-third-quarter-2015-have-been-changed')
+          add('2015-10-01',['KIPA','CRFSA','DOCO','NTHOL'],['TEKST','HURGZ','SASA','TRCAS'],'https://borsaistanbul.com/en/announcement/13524/bist-equity-indices-constituent-fourth-quarter-2015-have-been-changed')
+          os.makedirs('out',exist_ok=True)
+          with open('out/UOS_BIST100_PIT_CHANGE_LEDGER_2012_2015.csv','w',newline='',encoding='utf-8') as f:
+              w=csv.writer(f); w.writerow(['effective_date','direction','security_name_or_ticker','source_url','source_status']); w.writerows(rows)
+          with open('out/README.txt','w',encoding='utf-8') as f:
+              f.write('Official/primary-source BIST100 change ledger. Coverage: 2012Q1-Q3 and 2013Q1-2015Q4. 2012Q4 remains unresolved; 2011Q4 has secondary KAP-republished evidence and is not merged into certified ledger. Do not infer missing quarters.\n')
+      - uses: actions/upload-artifact@v4
+        with:
+          name: UOS_BIST100_PIT_CHANGE_LEDGER_2012_2015
+          path: out/
