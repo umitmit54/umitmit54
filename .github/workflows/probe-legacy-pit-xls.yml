@@ -1,0 +1,53 @@
+name: Probe Legacy PIT XLS
+on:
+  push:
+    paths:
+      - '.github/workflows/probe-legacy-pit-xls.yml'
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests xlrd pandas
+      - name: Probe legacy XLS
+        run: |
+          cat > /tmp/probe.py <<'PY'
+          import requests, zipfile, io, xlrd, json, re
+          dates=['20110301','20110715','20120416','20130319','20140401','20150701']
+          out={}
+          for ds in dates:
+              y,m,d=ds[:4],ds[4:6],ds[6:8]
+              url=f'https://borsaistanbul.com/data/thb/{y}/{m}/thb{ds}1.zip'
+              rec={'url':url}
+              try:
+                  r=requests.get(url,timeout=60,headers={'User-Agent':'Mozilla/5.0'}); rec['status']=r.status_code; rec['bytes']=len(r.content)
+                  if r.status_code!=200 or not r.content.startswith(b'PK'):
+                      out[ds]=rec; continue
+                  z=zipfile.ZipFile(io.BytesIO(r.content)); rec['names']=z.namelist()
+                  xls=[n for n in z.namelist() if n.lower().endswith('.xls')]
+                  if not xls: out[ds]=rec; continue
+                  b=xlrd.open_workbook(file_contents=z.read(xls[0]),formatting_info=False)
+                  rec['sheets']=[]
+                  for sh in b.sheets():
+                      rows=[]
+                      for i in range(min(sh.nrows,80)):
+                          vals=[sh.cell_value(i,j) for j in range(min(sh.ncols,25))]
+                          txt=' | '.join(str(v) for v in vals)
+                          if any(k in txt.upper() for k in ['KAPAN','DÜŞÜK','DUSUK','YÜKSEK','YUKSEK','HİSSE','HISSE','(3)','ENDEKS']):
+                              rows.append({'i':i,'vals':vals})
+                      rec['sheets'].append({'name':sh.name,'nrows':sh.nrows,'ncols':sh.ncols,'interesting':rows[:20]})
+              except Exception as e: rec['error']=repr(e)
+              out[ds]=rec
+          open('probe.json','w',encoding='utf-8').write(json.dumps(out,ensure_ascii=False,indent=2))
+          print(json.dumps(out,ensure_ascii=False,indent=2)[:30000])
+          PY
+          python /tmp/probe.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: legacy-pit-probe
+          path: probe.json
+          retention-days: 7
