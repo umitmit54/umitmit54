@@ -1,0 +1,34 @@
+name: UOS IsYatirim Schema Probe
+on:
+  push:
+    paths:
+      - '.github/workflows/uos_isyatirim_schema_probe.yml'
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests pandas
+      - name: Probe HisseTekil schema
+        run: |
+          python - <<'PY'
+          import requests, json
+          u='https://www.isyatirim.com.tr/_layouts/15/Isyatirim.Website/Common/Data.aspx/HisseTekil'
+          params={'hisse':'THYAO','startdate':'01-01-2017','enddate':'10-01-2017'}
+          r=requests.get(u,params=params,timeout=30)
+          print(r.status_code, r.url)
+          print(r.text[:1000])
+          data=r.json()
+          rows=data.get('value',[])
+          out={'status':r.status_code,'url':r.url,'row_count':len(rows),'keys':sorted(rows[0].keys()) if rows else [],'first_row':rows[0] if rows else None}
+          open('schema.json','w').write(json.dumps(out,ensure_ascii=False,indent=2,default=str))
+          print(json.dumps(out,ensure_ascii=False,indent=2,default=str))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: UOS_ISYATIRIM_SCHEMA_PROBE
+          path: schema.json
