@@ -1,0 +1,32 @@
+name: UOS Borsa Old XLS Probe
+on:
+  push:
+    branches: [uos-borsa-data-job]
+    paths: ['.github/workflows/uos-borsa-old-xls-probe.yml']
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: pip install -q pandas requests xlrd
+      - run: |
+          python - <<'PY'
+          import io,zipfile,requests,pandas as pd
+          for ds in ['2014-01-02','2015-01-02','2012-01-03']:
+            d=pd.Timestamp(ds); u=f'https://borsaistanbul.com/data/thb/{d:%Y}/{d:%m}/thb{d:%Y%m%d}1.zip'
+            r=requests.get(u,timeout=30,headers={'User-Agent':'Mozilla/5.0 UOS-Probe'})
+            with zipfile.ZipFile(io.BytesIO(r.content)) as z:
+              name=z.namelist()[0]; raw=z.read(name)
+            print('\nDATE',ds,'FILE',name)
+            xls=pd.ExcelFile(io.BytesIO(raw),engine='xlrd'); print('SHEETS',xls.sheet_names)
+            for sh in xls.sheet_names:
+              for hdr in [0,1,2,3,4,5]:
+                try:
+                  df=pd.read_excel(io.BytesIO(raw),sheet_name=sh,header=hdr,nrows=8,engine='xlrd')
+                  print('SHEET',sh,'HDR',hdr,'COLS',list(map(str,df.columns)))
+                  print(df.head(3).to_string())
+                except Exception as e: print('ERR',sh,hdr,repr(e))
+          PY
