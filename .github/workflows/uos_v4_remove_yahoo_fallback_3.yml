@@ -1,0 +1,41 @@
+name: UOS V4 Remove Yahoo Fallback 3
+on:
+  push:
+    paths:
+      - '.github/workflows/uos_v4_remove_yahoo_fallback_3.yml'
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install pandas requests
+      - name: Fetch IsYatirim factors
+        run: |
+          python - <<'PY'
+          import requests,pandas as pd,json,time
+          URL='https://www.isyatirim.com.tr/_layouts/15/Isyatirim.Website/Common/Data.aspx/HisseTekil'
+          rows=[]; errors=[]
+          for sym in ['ITTFH','LRSHO','ERBOS']:
+              try:
+                  r=requests.get(URL,params={'hisse':sym,'startdate':'16-07-2018','enddate':'04-09-2026'},timeout=60,headers={'User-Agent':'Mozilla/5.0'})
+                  r.raise_for_status()
+                  for x in r.json().get('value',[]):
+                      raw=x.get('HG_KAPANIS'); adj=x.get('HGDG_KAPANIS'); d=x.get('HGDG_TARIH')
+                      if raw not in (None,0) and adj is not None and d:
+                          rows.append([d,sym,raw,adj,float(adj)/float(raw),'ISYATIRIM_HGDG_HG'])
+              except Exception as e: errors.append({'symbol':sym,'error':repr(e)})
+          df=pd.DataFrame(rows,columns=['date','symbol','raw_close_isyatirim','adj_close_isyatirim','adjustment_factor','factor_source'])
+          if len(df): df['date']=pd.to_datetime(df.date,dayfirst=True).dt.strftime('%Y-%m-%d')
+          df.to_csv('ISYATIRIM_3_FALLBACK_REPLACEMENTS.csv.gz',index=False,compression='gzip')
+          open('STATUS.json','w').write(json.dumps({'rows':len(df),'symbols':int(df.symbol.nunique()) if len(df) else 0,'errors':errors},indent=2))
+          print(open('STATUS.json').read())
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: UOS_V4_ISYATIRIM_FALLBACK3
+          path: |
+            ISYATIRIM_3_FALLBACK_REPLACEMENTS.csv.gz
+            STATUS.json
