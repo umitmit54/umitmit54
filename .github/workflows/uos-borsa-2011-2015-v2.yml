@@ -1,0 +1,124 @@
+name: UOS Borsa 2011-2015 Canonical V2
+on:
+  push:
+    branches: [uos-borsa-data-job]
+    paths: ['.github/workflows/uos-borsa-2011-2015-v2.yml']
+  workflow_dispatch:
+
+jobs:
+  collect:
+    strategy:
+      fail-fast: false
+      matrix:
+        year: [2011, 2012, 2013, 2014, 2015]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: pip install -q pandas requests
+      - env:
+          YEAR: ${{ matrix.year }}
+        run: |
+          python - <<'PY'
+          import io, os, time, zipfile, json
+          from concurrent.futures import ThreadPoolExecutor, as_completed
+          import pandas as pd, requests
+          y=int(os.environ['YEAR'])
+          weekdays=pd.bdate_range(f'{y}-01-01',f'{y}-12-31').strftime('%Y-%m-%d').tolist()
+          def fetch(ds):
+            d=pd.Timestamp(ds); url=f'https://borsaistanbul.com/data/thb/{d:%Y}/{d:%m}/thb{d:%Y%m%d}1.zip'
+            try:
+              r=requests.get(url,timeout=15,headers={'User-Agent':'Mozilla/5.0 UOS-Borsa-Research/2.0'})
+              if r.status_code==200 and r.content[:2]==b'PK': return ds,'OK',r.content
+              if r.status_code==404: return ds,'CLOSED',None
+              return ds,'HTTP_'+str(r.status_code),None
+            except Exception as e: return ds,'ERR_'+type(e).__name__,None
+          got={}; status={}; pending=set(weekdays)
+          for attempt in range(1,7):
+            if not pending: break
+            with ThreadPoolExecutor(max_workers=12) as ex:
+              for f in as_completed([ex.submit(fetch,ds) for ds in sorted(pending)]):
+                ds,s,b=f.result(); status[ds]=s
+                if s=='OK': got[ds]=b
+            # only retry unresolved errors; 404 means confirmed closed
+            pending={d for d in weekdays if d not in got and status.get(d) not in ('CLOSED',)}
+            print('attempt',attempt,'got',len(got),'unresolved',len(pending),flush=True)
+            if pending: time.sleep(attempt*2)
+          unresolved=sorted(pending)
+          if unresolved: raise RuntimeError('unresolved_weekdays:'+','.join(unresolved[:20]))
+          frames=[]; errs=[]
+          for ds,b in sorted(got.items()):
+            try:
+              with zipfile.ZipFile(io.BytesIO(b)) as z:
+                names=[n for n in z.namelist() if n.lower().endswith('.csv')]
+                if not names: raise ValueError('zip_no_csv')
+                raw=z.read(names[0])
+              text=raw.decode('cp1254',errors='replace'); lines=text.splitlines(); skip=1 if len(lines)>1 and lines[1].startswith('TRADE DATE;') else 0
+              d=pd.read_csv(io.StringIO(text),sep=';',skiprows=skip,low_memory=False)
+              req=['INSTRUMENT SERIES CODE','INSTRUMENT NAME','INSTRUMENT GROUP','BIST 100 INDEX','OPENING PRICE','LOWEST PRICE','HIGHEST PRICE','CLOSING PRICE','TOTAL TRADED VOLUME','TOTAL TRADED VALUE']
+              miss=[c for c in req if c not in d.columns]
+              if miss: raise ValueError('missing_columns:'+','.join(miss))
+              q=d[(d['INSTRUMENT GROUP'].astype(str).str.strip()=='EQT') & d['INSTRUMENT SERIES CODE'].astype(str).str.endswith('.E')].copy()
+              if q.empty: raise ValueError('no_equity_rows')
+              frames.append(pd.DataFrame({'date':ds,'symbol':q['INSTRUMENT SERIES CODE'].astype(str).str.replace(r'\.E$','',regex=True).values,'name':q['INSTRUMENT NAME'].astype(str).str.strip().values,'open':pd.to_numeric(q['OPENING PRICE'],errors='coerce').values,'high':pd.to_numeric(q['HIGHEST PRICE'],errors='coerce').values,'low':pd.to_numeric(q['LOWEST PRICE'],errors='coerce').values,'close':pd.to_numeric(q['CLOSING PRICE'],errors='coerce').values,'volume':pd.to_numeric(q['TOTAL TRADED VOLUME'],errors='coerce').values,'turnover_try':pd.to_numeric(q['TOTAL TRADED VALUE'],errors='coerce').values,'bist100_pit':pd.to_numeric(q['BIST 100 INDEX'],errors='coerce').fillna(0).astype('int8').values,'source':'BIST_thb_'+pd.Timestamp(ds).strftime('%Y%m%d')+'1'}))
+            except Exception as e: errs.append((ds,str(e)))
+          os.makedirs('out',exist_ok=True)
+          panel=pd.concat(frames,ignore_index=True).dropna(subset=['date','symbol']).sort_values(['date','symbol']) if frames else pd.DataFrame()
+          if panel.empty: raise RuntimeError('panel_empty')
+          dups=int(panel.duplicated(['date','symbol']).sum()); panel=panel.drop_duplicates(['date','symbol'],keep='last')
+          bad=panel[(panel.high<panel[['open','close','low']].max(axis=1)) | (panel.low>panel[['open','close','high']].min(axis=1))]
+          counts=panel[panel.bist100_pit==1].groupby('date').symbol.nunique()
+          panel.to_csv(f'out/BIST_EQUITY_OHLCV_{y}.csv.gz',index=False,compression='gzip')
+          pd.DataFrame([{'date':d,'status':status.get(d),'downloaded':d in got} for d in weekdays]).to_csv(f'out/BULLETIN_MANIFEST_{y}.csv',index=False)
+          pd.DataFrame(errs,columns=['date','error']).to_csv(f'out/PARSE_ERRORS_{y}.csv',index=False)
+          rep={'year':y,'official_bulletins_downloaded':len(got),'equity_trading_dates':int(panel.date.nunique()),'rows':int(len(panel)),'symbols':int(panel.symbol.nunique()),'parse_errors':len(errs),'unresolved_weekdays':len(unresolved),'duplicate_rows_before_dedup':dups,'ohlc_invariant_errors':int(len(bad)),'bist100_count_min':int(counts.min()) if len(counts) else None,'bist100_count_max':int(counts.max()) if len(counts) else None}
+          rep['year_complete']=bool(not errs and not unresolved and len(bad)==0 and len(panel)>0)
+          open(f'out/QUALITY_{y}.json','w').write(json.dumps(rep,ensure_ascii=False,indent=2)); print(json.dumps(rep,ensure_ascii=False),flush=True)
+          if not rep['year_complete']: raise RuntimeError('year_gate_failed')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bist-2011v2-${{ matrix.year }}
+          path: out/
+          retention-days: 30
+
+  combine:
+    needs: collect
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: pip install -q pandas websocket-client git+https://github.com/rongardF/tvdatafeed.git
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bist-2011v2-*
+          path: all
+      - name: Build canonical and validate against XU100
+        run: |
+          python - <<'PY'
+          import glob,json,os,pandas as pd
+          from tvDatafeed import TvDatafeed,Interval
+          os.makedirs('final',exist_ok=True)
+          p=pd.concat([pd.read_csv(f) for f in glob.glob('all/**/BIST_EQUITY_OHLCV_*.csv.gz',recursive=True)],ignore_index=True).sort_values(['date','symbol']).drop_duplicates(['date','symbol'],keep='last')
+          reps=sorted([json.load(open(f)) for f in glob.glob('all/**/QUALITY_*.json',recursive=True)],key=lambda x:x['year'])
+          tv=TvDatafeed(); b=tv.get_hist(symbol='XU100',exchange='BIST',interval=Interval.in_daily,n_bars=5000)
+          if b is None or b.empty: raise SystemExit('benchmark_empty')
+          b=b.reset_index(); b['date']=pd.to_datetime(b.iloc[:,0],errors='coerce').dt.strftime('%Y-%m-%d'); b=b[(b.date>='2011-01-01')&(b.date<='2015-12-31')]
+          bd=set(b.date.dropna()); pdts=set(p.date.dropna()); missing=sorted(bd-pdts); extra=sorted(pdts-bd)
+          p.to_csv('final/BIST_EQUITY_OHLCV_2011-01-01_2015-12-31.csv.gz',index=False,compression='gzip')
+          bb=b[['date','open','high','low','close','volume']].copy(); bb.insert(1,'symbol','XU100'); bb['source']='TradingView:BIST:XU100'; bb.to_csv('final/XU100_PRICE_OHLC_2011-01-01_2015-12-31.csv',index=False)
+          pd.concat([pd.read_csv(f) for f in glob.glob('all/**/BULLETIN_MANIFEST_*.csv',recursive=True)],ignore_index=True).sort_values('date').to_csv('final/BULLETIN_DOWNLOAD_MANIFEST.csv',index=False)
+          ee=pd.concat([pd.read_csv(f) for f in glob.glob('all/**/PARSE_ERRORS_*.csv',recursive=True)],ignore_index=True); ee.to_csv('final/PARSE_ERRORS.csv',index=False)
+          pd.DataFrame({'date':missing}).to_csv('final/TRUE_MISSING_BULLETIN_DATES.csv',index=False); pd.DataFrame({'date':extra}).to_csv('final/BENCHMARK_GAP_DATES.csv',index=False)
+          rep={'period':['2011-01-01','2015-12-31'],'benchmark_type':'BIST:XU100 price index','equity_rows':int(len(p)),'equity_trading_dates':int(p.date.nunique()),'unique_symbols':int(p.symbol.nunique()),'benchmark_rows':int(len(bb)),'missing_bulletin_dates_vs_benchmark':len(missing),'benchmark_gap_dates':len(extra),'parse_error_rows':int(len(ee)),'years':reps}
+          rep['complete_gate']=bool(len(p)>0 and len(bb)==int(p.date.nunique()) and not missing and not extra and len(ee)==0 and all(r['year_complete'] for r in reps))
+          open('final/QUALITY_REPORT.json','w').write(json.dumps(rep,ensure_ascii=False,indent=2)); print(json.dumps(rep,ensure_ascii=False,indent=2),flush=True)
+          if not rep['complete_gate']: raise SystemExit('FINAL QUALITY GATE FAILED')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: UOS_BORSA_2011_2015_CANONICAL_COMPLETE_V2
+          path: final/
+          retention-days: 30
