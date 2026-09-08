@@ -1,0 +1,44 @@
+name: Probe 2015 BISTECH CSV
+on:
+  push:
+    paths:
+      - '.github/workflows/probe-2015-bistech-csv.yml'
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Probe
+        run: |
+          python - <<'PY'
+          import requests,zipfile,io,json
+          out={}
+          for ds in ['20151130','20151201','20151231']:
+            y,m=ds[:4],ds[4:6]
+            u=f'https://borsaistanbul.com/data/thb/{y}/{m}/thb{ds}1.zip'
+            r=requests.get(u,timeout=60,headers={'User-Agent':'Mozilla/5.0'})
+            rec={'status':r.status_code,'bytes':len(r.content)}
+            if r.status_code==200 and r.content.startswith(b'PK'):
+              z=zipfile.ZipFile(io.BytesIO(r.content)); rec['names']=z.namelist()
+              previews={}
+              for n in z.namelist():
+                if n.lower().endswith(('.csv','.txt')):
+                  b=z.read(n)
+                  for enc in ['utf-8-sig','cp1254','latin1']:
+                    try: s=b.decode(enc); break
+                    except: s=None
+                  previews[n]=s[:5000] if s else '<decode failed>'
+              rec['previews']=previews
+            out[ds]=rec
+          open('bistech_probe.json','w',encoding='utf-8').write(json.dumps(out,ensure_ascii=False,indent=2))
+          print(json.dumps(out,ensure_ascii=False,indent=2)[:40000])
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bistech-2015-probe
+          path: bistech_probe.json
+          retention-days: 7
