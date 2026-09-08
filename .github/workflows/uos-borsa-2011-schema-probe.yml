@@ -1,0 +1,30 @@
+name: UOS Borsa 2011 Schema Probe
+on:
+  push:
+    branches: [uos-borsa-data-job]
+    paths: ['.github/workflows/uos-borsa-2011-schema-probe.yml']
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: pip install -q pandas requests
+      - run: |
+          python - <<'PY'
+          import io,zipfile,requests,pandas as pd
+          for ds in ['20110103','20110615','20111230']:
+            u=f'https://borsaistanbul.com/data/thb/{ds[:4]}/{ds[4:6]}/thb{ds}1.zip'
+            r=requests.get(u,timeout=30,headers={'User-Agent':'Mozilla/5.0'})
+            print('URL',u,'status',r.status_code,'zip',r.content[:2])
+            if r.status_code!=200 or r.content[:2]!=b'PK': continue
+            with zipfile.ZipFile(io.BytesIO(r.content)) as z:
+              print('names',z.namelist()); raw=z.read([n for n in z.namelist() if n.lower().endswith('.csv')][0])
+            text=raw.decode('cp1254',errors='replace'); print('HEAD\n', '\n'.join(text.splitlines()[:8]))
+            lines=text.splitlines(); skip=1 if len(lines)>1 and lines[1].startswith('TRADE DATE;') else 0
+            d=pd.read_csv(io.StringIO(text),sep=';',skiprows=skip,low_memory=False)
+            print('columns',list(d.columns))
+            for c in ['INSTRUMENT GROUP','INSTRUMENT TYPE','INSTRUMENT SERIES CODE','BIST 100 INDEX']:
+              if c in d.columns: print(c, d[c].astype(str).value_counts().head(15).to_dict())
+          PY
