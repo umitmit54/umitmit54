@@ -1,0 +1,38 @@
+name: UOS Borsa Old Schema Probe
+on:
+  push:
+    branches: [uos-borsa-data-job]
+    paths: ['.github/workflows/uos-borsa-old-schema-probe.yml']
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: pip install -q pandas requests
+      - run: |
+          python - <<'PY'
+          import io,zipfile,requests,pandas as pd
+          for ds in ['2014-01-02','2015-01-02','2012-01-03']:
+            d=pd.Timestamp(ds); u=f'https://borsaistanbul.com/data/thb/{d:%Y}/{d:%m}/thb{d:%Y%m%d}1.zip'
+            r=requests.get(u,timeout=30,headers={'User-Agent':'Mozilla/5.0 UOS-Probe'})
+            print('\nDATE',ds,'HTTP',r.status_code,'SIZE',len(r.content))
+            if r.status_code!=200 or r.content[:2]!=b'PK': continue
+            with zipfile.ZipFile(io.BytesIO(r.content)) as z:
+              print('NAMES',z.namelist())
+              for name in z.namelist():
+                if not name.lower().endswith('.csv'): continue
+                raw=z.read(name)
+                text=raw.decode('cp1254',errors='replace')
+                print('FILE',name)
+                print('FIRSTLINES')
+                print('\n'.join(text.splitlines()[:8]))
+                for skip in [0,1,2]:
+                  try:
+                    df=pd.read_csv(io.StringIO(text),sep=';',skiprows=skip,nrows=10,low_memory=False)
+                    print('SKIP',skip,'COLS',list(df.columns))
+                    print(df.head(3).to_string())
+                  except Exception as e: print('READERR',skip,repr(e))
+          PY
