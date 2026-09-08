@@ -14,99 +14,61 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install pandas pyarrow yfinance requests
-      - name: Build 2011-2015 max coverage panel
+      - name: Build 2011-2015 expanded historical panel
         run: |
           cat > /tmp/build.py <<'PY'
-          import io, os, json, zipfile, requests, pandas as pd, numpy as np, yfinance as yf
+          import io, json, requests, pandas as pd, yfinance as yf
           from pathlib import Path
           out=Path('uos_out'); out.mkdir(exist_ok=True)
           headers={'User-Agent':'Mozilla/5.0'}
-          # 1) Current BIST symbols from Borsa Istanbul index components CSV
-          url='https://www.borsaistanbul.com/datum/hisse_endeks_ds.csv'
-          r=requests.get(url,headers=headers,timeout=60); r.raise_for_status()
-          df=pd.read_csv(io.StringIO(r.text),sep=';',encoding='utf-8-sig')
-          df.columns=[str(c).strip() for c in df.columns]
-          if len(df)>0: df=df.iloc[1:].copy()
-          syms=[]
+          # Current BIST universe
+          r=requests.get('https://www.borsaistanbul.com/datum/hisse_endeks_ds.csv',headers=headers,timeout=60); r.raise_for_status()
+          df=pd.read_csv(io.StringIO(r.text),sep=';',encoding='utf-8-sig'); df.columns=[str(c).strip() for c in df.columns]
+          if len(df): df=df.iloc[1:].copy()
+          current=[]
           for x in df.get('BILESEN KODU',[]):
               s=str(x).strip().replace('.E','')
-              if s and s!='nan' and s not in syms: syms.append(s)
-          # 2) Yahoo OHLCV current-listed universe, historical 2011-2015
+              if s and s!='nan' and s not in current: current.append(s)
+          # Official 2016 BIST universe extracted from our canonical BIST bulletin panel
+          hist=[x.strip() for x in Path('data/historical_universe_2016.txt').read_text().splitlines() if x.strip()]
+          syms=sorted(set(current)|set(hist))
           rows=[]; audit=[]
-          for i in range(0,len(syms),20):
-              batch=[s+'.IS' for s in syms[i:i+20]]
+          for i in range(0,len(syms),15):
+              chunk=syms[i:i+15]; tickers=[s+'.IS' for s in chunk]
               try:
-                  d=yf.download(batch,start='2010-06-01',end='2016-01-05',group_by='ticker',auto_adjust=False,actions=False,progress=False,threads=True)
+                  d=yf.download(tickers,start='2010-06-01',end='2016-01-05',group_by='ticker',auto_adjust=False,actions=False,progress=False,threads=True)
               except Exception as e:
                   audit.append({'batch':i,'error':repr(e)}); continue
-              for t in batch:
+              for s,t in zip(chunk,tickers):
                   try:
                       q=d[t] if isinstance(d.columns,pd.MultiIndex) else d
                       q=q.reset_index()
-                      if q.empty: continue
-                      cols={c.lower():c for c in q.columns if isinstance(c,str)}
                       need=['Date','Open','High','Low','Close','Volume']
-                      if not all(n in q.columns for n in need): continue
-                      q=q[need].copy(); q['symbol']=t[:-3]; q['source']='YAHOO_CURRENT_UNIVERSE'
-                      q=q[(q.Date>='2011-01-01')&(q.Date<='2015-12-31')]
-                      q=q.dropna(subset=['Close'])
-                      rows.append(q)
-                  except Exception as e: audit.append({'symbol':t,'error':repr(e)})
-          y=pd.concat(rows,ignore_index=True) if rows else pd.DataFrame(columns=['Date','Open','High','Low','Close','Volume','symbol','source'])
-          # 3) Open BIST100 archive (2010-2024) as extra historical coverage / cross-check
-          zurl='https://github.com/burakbayramli/alldata/archive/refs/heads/main.zip'
-          try:
-              zr=requests.get(zurl,headers=headers,timeout=120); zr.raise_for_status()
-              zz=zipfile.ZipFile(io.BytesIO(zr.content))
-              extra=[]
-              for n in zz.namelist():
-                  if '/bist/2010-2024/' in n and n.endswith('.csv'):
-                      sym=Path(n).stem
-                      try:
-                          q=pd.read_csv(zz.open(n))
-                          q.columns=[str(c).strip() for c in q.columns]
-                          # normalize likely columns
-                          cm={c.lower():c for c in q.columns}
-                          datec=cm.get('date') or cm.get('datetime')
-                          closec=cm.get('close') or cm.get('price')
-                          if not datec or not closec: continue
-                          z=pd.DataFrame({'Date':pd.to_datetime(q[datec],errors='coerce'),'Close':pd.to_numeric(q[closec],errors='coerce')})
-                          for k in ['open','high','low','volume']:
-                              c=cm.get(k); z[k.capitalize()]=pd.to_numeric(q[c],errors='coerce') if c else np.nan
-                          z['symbol']=sym; z['source']='OPEN_BIST100_ARCHIVE'
-                          z=z[(z.Date>='2011-01-01')&(z.Date<='2015-12-31')].dropna(subset=['Date','Close'])
-                          if len(z): extra.append(z[['Date','Open','High','Low','Close','Volume','symbol','source']])
-                      except Exception: pass
-              a=pd.concat(extra,ignore_index=True) if extra else pd.DataFrame(columns=y.columns)
-          except Exception as e:
-              audit.append({'archive_error':repr(e)}); a=pd.DataFrame(columns=y.columns)
-          # merge: prefer Yahoo full OHLCV; archive fills missing symbol-date/close
-          allp=pd.concat([y,a],ignore_index=True)
-          allp['Date']=pd.to_datetime(allp['Date']).dt.normalize()
-          allp=allp.sort_values(['symbol','Date','source'])
-          # source priority Yahoo first
-          allp['prio']=allp.source.map({'YAHOO_CURRENT_UNIVERSE':0,'OPEN_BIST100_ARCHIVE':1}).fillna(9)
-          allp=allp.sort_values(['symbol','Date','prio']).drop_duplicates(['symbol','Date'],keep='first').drop(columns='prio')
-          # QC
-          allp=allp[(allp.Close>0)]
-          bad=((allp.High.notna()&allp.Low.notna())&(allp.High<allp.Low)).sum()
-          coverage=allp.groupby('symbol').agg(first_date=('Date','min'),last_date=('Date','max'),rows=('Date','size'),source=('source',lambda x:','.join(sorted(set(x))))).reset_index()
-          allp.to_parquet(out/'UOS_BIST_2011_2015_MAX_COVERAGE.parquet',index=False)
-          allp.to_csv(out/'UOS_BIST_2011_2015_MAX_COVERAGE.csv.gz',index=False,compression='gzip')
-          coverage.to_csv(out/'symbol_coverage.csv',index=False)
-          pd.DataFrame(audit).to_csv(out/'download_audit.csv',index=False)
-          summary={
-            'period':'2011-01-01..2015-12-31','rows':int(len(allp)),'symbols':int(allp.symbol.nunique()),
-            'current_bist_symbols_requested':len(syms),'ohlc_inconsistencies':int(bad),
-            'source_counts':allp.source.value_counts().to_dict(),
-            'status':'MAX_COVERAGE_NOT_SURVIVORSHIP_COMPLETE',
-            'note':'Includes all current BIST symbols with Yahoo history plus open BIST100 archive. Historical delisted/non-current symbols outside archive still require lifecycle completion.'}
+                      if not all(n in q.columns for n in need):
+                          audit.append({'symbol':s,'status':'missing_columns'}); continue
+                      q=q[need].copy(); q['symbol']=s
+                      q['universe_seed']='CURRENT' if s in current else 'OFFICIAL_2016_HISTORICAL'
+                      q['source']='YAHOO'
+                      q=q[(q.Date>='2011-01-01')&(q.Date<='2015-12-31')].dropna(subset=['Close'])
+                      if len(q): rows.append(q)
+                      else: audit.append({'symbol':s,'status':'no_2011_2015_data'})
+                  except Exception as e: audit.append({'symbol':s,'status':'error','error':repr(e)})
+          p=pd.concat(rows,ignore_index=True) if rows else pd.DataFrame(columns=['Date','Open','High','Low','Close','Volume','symbol','universe_seed','source'])
+          p['Date']=pd.to_datetime(p['Date']).dt.normalize(); p=p[p.Close>0]
+          p=p.sort_values(['symbol','Date']).drop_duplicates(['symbol','Date'])
+          bad=int(((p.High.notna()&p.Low.notna())&(p.High<p.Low)).sum())
+          cov=p.groupby('symbol').agg(first_date=('Date','min'),last_date=('Date','max'),rows=('Date','size'),universe_seed=('universe_seed','first')).reset_index()
+          p.to_parquet(out/'UOS_BIST_2011_2015_EXPANDED.parquet',index=False)
+          p.to_csv(out/'UOS_BIST_2011_2015_EXPANDED.csv.gz',index=False,compression='gzip')
+          cov.to_csv(out/'symbol_coverage.csv',index=False)
+          pd.DataFrame(audit).to_csv(out/'missing_or_failed_symbols.csv',index=False)
+          summary={'period':'2011-01-01..2015-12-31','rows':int(len(p)),'symbols_with_data':int(p.symbol.nunique()),'requested_union_symbols':len(syms),'current_seed':len(current),'official_2016_seed':len(hist),'official_2016_noncurrent_seed':len(set(hist)-set(current)),'ohlc_inconsistencies':bad,'status':'EXPANDED_MAX_COVERAGE','residual_gap':'Companies delisted before 2016 and absent from current universe may still be missing.'}
           (out/'SUMMARY.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2),encoding='utf-8')
           print(json.dumps(summary,ensure_ascii=False,indent=2))
           PY
           python /tmp/build.py
       - uses: actions/upload-artifact@v4
         with:
-          name: UOS_BIST_2011_2015_MAX_COVERAGE
+          name: UOS_BIST_2011_2015_EXPANDED
           path: uos_out/
           retention-days: 30
