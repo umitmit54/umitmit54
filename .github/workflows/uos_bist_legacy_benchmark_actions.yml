@@ -1,0 +1,86 @@
+name: UOS Legacy Benchmark Actions
+on:
+  push:
+    paths:
+      - '.github/workflows/uos_bist_legacy_benchmark_actions.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install pandas pyarrow yfinance requests
+      - name: Build 2011-2015 benchmark and corporate actions
+        run: |
+          cat > /tmp/build.py <<'PY'
+          import io, json, requests, pandas as pd, numpy as np, yfinance as yf
+          from pathlib import Path
+          out=Path('uos_legacy04'); out.mkdir(exist_ok=True)
+          # XU100 price benchmark
+          b=yf.download('XU100.IS',start='2011-01-01',end='2016-01-05',auto_adjust=False,actions=False,progress=False)
+          if b.empty:
+              b=yf.download('^XU100',start='2011-01-01',end='2016-01-05',auto_adjust=False,actions=False,progress=False)
+          b=b.reset_index()
+          if isinstance(b.columns,pd.MultiIndex): b.columns=[c[0] for c in b.columns]
+          b.columns=[str(c) for c in b.columns]
+          b=b.rename(columns={'Date':'date','Open':'open','High':'high','Low':'low','Close':'close','Adj Close':'adj_close','Volume':'volume'})
+          b=b[[c for c in ['date','open','high','low','close','adj_close','volume'] if c in b.columns]]
+          b['date']=pd.to_datetime(b['date']).dt.date
+          b.to_csv(out/'XU100_PRICE_2011_2015.csv',index=False)
+          # universe = current BIST + official 2016 historical seed
+          r=requests.get('https://www.borsaistanbul.com/datum/hisse_endeks_ds.csv',headers={'User-Agent':'Mozilla/5.0'},timeout=60); r.raise_for_status()
+          df=pd.read_csv(io.StringIO(r.text),sep=';',encoding='utf-8-sig'); df.columns=[str(c).strip() for c in df.columns]
+          if len(df): df=df.iloc[1:].copy()
+          cur=[]
+          for x in df.get('BILESEN KODU',[]):
+              s=str(x).strip().replace('.E','')
+              if s and s!='nan': cur.append(s)
+          hist=[x.strip() for x in Path('data/historical_universe_2016.txt').read_text().splitlines() if x.strip()]
+          syms=sorted(set(cur)|set(hist))
+          acts=[]; adj=[]; audit=[]
+          for i in range(0,len(syms),12):
+              chunk=syms[i:i+12]; tickers=[s+'.IS' for s in chunk]
+              try:
+                  d=yf.download(tickers,start='2010-12-15',end='2016-01-05',group_by='ticker',auto_adjust=False,actions=True,progress=False,threads=True)
+              except Exception as e:
+                  audit.append({'batch':i,'error':repr(e)}); continue
+              for s,t in zip(chunk,tickers):
+                  try:
+                      q=d[t].copy() if isinstance(d.columns,pd.MultiIndex) else d.copy()
+                      q=q.reset_index()
+                      if q.empty: continue
+                      if 'Date' not in q.columns: continue
+                      q['Date']=pd.to_datetime(q['Date'])
+                      q=q[(q.Date>='2011-01-01')&(q.Date<='2015-12-31')]
+                      if q.empty: continue
+                      if 'Dividends' in q.columns or 'Stock Splits' in q.columns:
+                          for _,r0 in q.iterrows():
+                              div=float(r0.get('Dividends',0) or 0); spl=float(r0.get('Stock Splits',0) or 0)
+                              if div!=0 or spl!=0:
+                                  acts.append({'date':r0['Date'].date(),'symbol':s,'dividend':div,'stock_split':spl,'source':'YAHOO'})
+                      if 'Close' in q.columns and 'Adj Close' in q.columns:
+                          z=q[['Date','Close','Adj Close']].copy(); z['symbol']=s
+                          z['adjustment_factor']=pd.to_numeric(z['Adj Close'],errors='coerce')/pd.to_numeric(z['Close'],errors='coerce')
+                          z=z.replace([np.inf,-np.inf],np.nan).dropna(subset=['adjustment_factor'])
+                          for _,r0 in z.iterrows():
+                              adj.append({'date':r0['Date'].date(),'symbol':s,'close':float(r0['Close']),'adj_close':float(r0['Adj Close']),'adjustment_factor':float(r0['adjustment_factor']),'source':'YAHOO'})
+                  except Exception as e: audit.append({'symbol':s,'error':repr(e)})
+          adf=pd.DataFrame(acts); jdf=pd.DataFrame(adj); aud=pd.DataFrame(audit)
+          adf.to_csv(out/'CORPORATE_ACTIONS_2011_2015.csv',index=False)
+          jdf.to_parquet(out/'ADJUSTMENT_FACTORS_2011_2015.parquet',index=False)
+          jdf.to_csv(out/'ADJUSTMENT_FACTORS_2011_2015.csv.gz',index=False,compression='gzip')
+          aud.to_csv(out/'ACTIONS_AUDIT.csv',index=False)
+          summary={'benchmark_rows':int(len(b)),'actions_rows':int(len(adf)),'adjustment_rows':int(len(jdf)),'symbols_adjusted':int(jdf.symbol.nunique()) if len(jdf) else 0,'requested_symbols':len(syms),'status':'LEGACY_04_BUILT'}
+          (out/'SUMMARY.json').write_text(json.dumps(summary,indent=2),encoding='utf-8')
+          print(json.dumps(summary,indent=2))
+          PY
+          python /tmp/build.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: UOS_LEGACY_04_BENCHMARK_ACTIONS
+          path: uos_legacy04/
+          retention-days: 30
