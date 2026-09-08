@@ -1,0 +1,112 @@
+name: Build Legacy Official PIT
+on:
+  push:
+    paths:
+      - '.github/workflows/build-legacy-official-pit.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests xlrd pandas
+      - name: Build official daily PIT 2011-2015
+        run: |
+          cat > /tmp/build_pit.py <<'PY'
+          import requests, zipfile, io, xlrd, json, re, unicodedata, time
+          import pandas as pd
+          from concurrent.futures import ThreadPoolExecutor, as_completed
+          from pathlib import Path
+          out=Path('legacy_pit'); out.mkdir(exist_ok=True)
+          session=requests.Session(); session.headers.update({'User-Agent':'Mozilla/5.0'})
+
+          def norm(s):
+              s=str(s or '').replace('\n',' ').strip().upper()
+              trans=str.maketrans('İIŞĞÜÖÇıışğüöç','IISGUOCii sguoc'.replace(' ',''))
+              try: s=s.translate(trans)
+              except: pass
+              s=' '.join(s.split())
+              return s
+
+          def parse_date(dt):
+              ds=dt.strftime('%Y%m%d'); y=dt.strftime('%Y'); m=dt.strftime('%m')
+              url=f'https://borsaistanbul.com/data/thb/{y}/{m}/thb{ds}1.zip'
+              rec={'date':dt.strftime('%Y-%m-%d'),'url':url}
+              try:
+                  r=session.get(url,timeout=45)
+                  if r.status_code==404: rec['status']='no_file'; return rec,[],None
+                  if r.status_code!=200 or not r.content.startswith(b'PK'):
+                      rec['status']=f'http_{r.status_code}'; return rec,[],None
+                  z=zipfile.ZipFile(io.BytesIO(r.content)); xls=[n for n in z.namelist() if n.lower().endswith('.xls')]
+                  if not xls: rec['status']='no_xls'; return rec,[],None
+                  wb=xlrd.open_workbook(file_contents=z.read(xls[0]),formatting_info=False)
+                  members=set(); benchmark=None
+                  # PIT: every equity-like sheet has marker in col 0 and ticker in col 1
+                  for sh in wb.sheets():
+                      if sh.ncols < 2: continue
+                      equity_header=False
+                      for i in range(min(20,sh.nrows)):
+                          row=[norm(sh.cell_value(i,j)) for j in range(min(sh.ncols,4))]
+                          txt=' '.join(row)
+                          if ('PAYIN KODU' in txt or 'HISSE SENEDININ KODU' in txt or 'HISSE SENEDI KODU' in txt):
+                              equity_header=True; break
+                      if equity_header:
+                          for i in range(sh.nrows):
+                              marker=str(sh.cell_value(i,0)).strip() if sh.ncols>0 else ''
+                              ticker=str(sh.cell_value(i,1)).strip().upper() if sh.ncols>1 else ''
+                              ticker=ticker.replace('.E','')
+                              if '>' in marker and re.match(r'^[A-Z0-9]{2,12}$',ticker): members.add(ticker)
+                      # benchmark: scan Endeksler sheet for row containing IMKB/BIST 100
+                      if norm(sh.name)=='ENDEKSLER':
+                          for i in range(sh.nrows):
+                              vals=[sh.cell_value(i,j) for j in range(sh.ncols)]
+                              texts=[norm(v) for v in vals]
+                              if any(t in ('IMKB 100','BIST 100','IMKB ULUSAL 100','BIST 100 GETIRI','BIST 100 FIYAT') or ('100' in t and ('IMKB' in t or 'BIST' in t)) for t in texts):
+                                  nums=[float(v) for v in vals if isinstance(v,(int,float)) and v not in (0,0.0)]
+                                  benchmark={'raw_row':json.dumps(vals,ensure_ascii=False),'numeric_values':json.dumps(nums)}
+                                  break
+                  rec['status']='ok'; rec['pit_count']=len(members)
+                  return rec,sorted(members),benchmark
+              except Exception as e:
+                  rec['status']='error'; rec['error']=repr(e); return rec,[],None
+
+          weekdays=pd.bdate_range('2011-01-01','2015-12-31')
+          audits=[]; pitrows=[]; benchrows=[]
+          with ThreadPoolExecutor(max_workers=12) as ex:
+              futs={ex.submit(parse_date,dt):dt for dt in weekdays}
+              for fut in as_completed(futs):
+                  rec,members,bench=fut.result(); audits.append(rec)
+                  if rec.get('status')=='ok':
+                      for s in members: pitrows.append({'date':rec['date'],'symbol':s,'bist100_pit':1,'source':'BIST_LEGACY_DAILY_BULLETIN'})
+                      if bench: benchrows.append({'date':rec['date'],**bench})
+          audit=pd.DataFrame(audits).sort_values('date')
+          pit=pd.DataFrame(pitrows).sort_values(['date','symbol']) if pitrows else pd.DataFrame(columns=['date','symbol','bist100_pit','source'])
+          bench=pd.DataFrame(benchrows).sort_values('date') if benchrows else pd.DataFrame()
+          counts=pit.groupby('date').symbol.nunique().rename('pit_count').reset_index() if len(pit) else pd.DataFrame(columns=['date','pit_count'])
+          audit.to_csv(out/'LEGACY_PIT_DOWNLOAD_AUDIT.csv',index=False)
+          pit.to_csv(out/'PIT_BIST100_DAILY_2011_2015_OFFICIAL.csv.gz',index=False,compression='gzip')
+          counts.to_csv(out/'PIT_DAILY_COUNTS.csv',index=False)
+          bench.to_csv(out/'LEGACY_INDEX_RAW_ROWS.csv',index=False)
+          valid=counts[counts.pit_count==100]
+          bad=counts[counts.pit_count!=100]
+          summary={
+            'weekdays_attempted':len(weekdays),'official_bulletin_days':int((audit.status=='ok').sum()),
+            'no_file_days':int((audit.status=='no_file').sum()),'error_days':int((audit.status=='error').sum()),
+            'pit_rows':int(len(pit)),'pit_dates':int(pit.date.nunique()) if len(pit) else 0,
+            'dates_exactly_100':int(len(valid)),'dates_not_100':int(len(bad)),
+            'pit_count_min':int(counts.pit_count.min()) if len(counts) else None,'pit_count_max':int(counts.pit_count.max()) if len(counts) else None,
+            'status':'PASS' if len(counts)>0 and len(bad)==0 else 'REVIEW'
+          }
+          bad.to_csv(out/'PIT_COUNT_EXCEPTIONS.csv',index=False)
+          (out/'SUMMARY.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2),encoding='utf-8')
+          print(json.dumps(summary,ensure_ascii=False,indent=2))
+          PY
+          python /tmp/build_pit.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: UOS_BIST_LEGACY_OFFICIAL_PIT
+          path: legacy_pit/
+          retention-days: 30
