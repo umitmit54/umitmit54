@@ -21,7 +21,6 @@ jobs:
           from pathlib import Path
           out=Path('uos_out'); out.mkdir(exist_ok=True)
           headers={'User-Agent':'Mozilla/5.0'}
-          # Current BIST universe
           r=requests.get('https://www.borsaistanbul.com/datum/hisse_endeks_ds.csv',headers=headers,timeout=60); r.raise_for_status()
           df=pd.read_csv(io.StringIO(r.text),sep=';',encoding='utf-8-sig'); df.columns=[str(c).strip() for c in df.columns]
           if len(df): df=df.iloc[1:].copy()
@@ -29,7 +28,6 @@ jobs:
           for x in df.get('BILESEN KODU',[]):
               s=str(x).strip().replace('.E','')
               if s and s!='nan' and s not in current: current.append(s)
-          # Official 2016 BIST universe extracted from our canonical BIST bulletin panel
           hist=[x.strip() for x in Path('data/historical_universe_2016.txt').read_text().splitlines() if x.strip()]
           syms=sorted(set(current)|set(hist))
           rows=[]; audit=[]
@@ -42,13 +40,10 @@ jobs:
               for s,t in zip(chunk,tickers):
                   try:
                       q=d[t] if isinstance(d.columns,pd.MultiIndex) else d
-                      q=q.reset_index()
-                      need=['Date','Open','High','Low','Close','Volume']
+                      q=q.reset_index(); need=['Date','Open','High','Low','Close','Volume']
                       if not all(n in q.columns for n in need):
                           audit.append({'symbol':s,'status':'missing_columns'}); continue
-                      q=q[need].copy(); q['symbol']=s
-                      q['universe_seed']='CURRENT' if s in current else 'OFFICIAL_2016_HISTORICAL'
-                      q['source']='YAHOO'
+                      q=q[need].copy(); q['symbol']=s; q['universe_seed']='CURRENT' if s in current else 'OFFICIAL_2016_HISTORICAL'; q['source']='YAHOO'
                       q=q[(q.Date>='2011-01-01')&(q.Date<='2015-12-31')].dropna(subset=['Close'])
                       if len(q): rows.append(q)
                       else: audit.append({'symbol':s,'status':'no_2011_2015_data'})
@@ -56,19 +51,19 @@ jobs:
           p=pd.concat(rows,ignore_index=True) if rows else pd.DataFrame(columns=['Date','Open','High','Low','Close','Volume','symbol','universe_seed','source'])
           p['Date']=pd.to_datetime(p['Date']).dt.normalize(); p=p[p.Close>0]
           p=p.sort_values(['symbol','Date']).drop_duplicates(['symbol','Date'])
-          bad=int(((p.High.notna()&p.Low.notna())&(p.High<p.Low)).sum())
+          badmask=(p.High.notna()&p.Low.notna())&(p.High<p.Low)
+          p.loc[badmask].to_csv(out/'rejected_ohlc_rows.csv',index=False)
+          rejected=int(badmask.sum()); p=p[~badmask].copy()
           cov=p.groupby('symbol').agg(first_date=('Date','min'),last_date=('Date','max'),rows=('Date','size'),universe_seed=('universe_seed','first')).reset_index()
-          p.to_parquet(out/'UOS_BIST_2011_2015_EXPANDED.parquet',index=False)
-          p.to_csv(out/'UOS_BIST_2011_2015_EXPANDED.csv.gz',index=False,compression='gzip')
-          cov.to_csv(out/'symbol_coverage.csv',index=False)
-          pd.DataFrame(audit).to_csv(out/'missing_or_failed_symbols.csv',index=False)
-          summary={'period':'2011-01-01..2015-12-31','rows':int(len(p)),'symbols_with_data':int(p.symbol.nunique()),'requested_union_symbols':len(syms),'current_seed':len(current),'official_2016_seed':len(hist),'official_2016_noncurrent_seed':len(set(hist)-set(current)),'ohlc_inconsistencies':bad,'status':'EXPANDED_MAX_COVERAGE','residual_gap':'Companies delisted before 2016 and absent from current universe may still be missing.'}
-          (out/'SUMMARY.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2),encoding='utf-8')
-          print(json.dumps(summary,ensure_ascii=False,indent=2))
+          p.to_parquet(out/'UOS_BIST_2011_2015_EXPANDED_QC.parquet',index=False)
+          p.to_csv(out/'UOS_BIST_2011_2015_EXPANDED_QC.csv.gz',index=False,compression='gzip')
+          cov.to_csv(out/'symbol_coverage.csv',index=False); pd.DataFrame(audit).to_csv(out/'missing_or_failed_symbols.csv',index=False)
+          summary={'period':'2011-01-01..2015-12-31','rows':int(len(p)),'symbols_with_data':int(p.symbol.nunique()),'requested_union_symbols':len(syms),'current_seed':len(current),'official_2016_seed':len(hist),'official_2016_noncurrent_seed':len(set(hist)-set(current)),'rejected_ohlc_rows':rejected,'ohlc_inconsistencies_after_qc':0,'status':'EXPANDED_MAX_COVERAGE_QC_PASS','residual_gap':'Only companies delisted before 2016 and absent from current/2016 official universes may still be missing.'}
+          (out/'SUMMARY.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2),encoding='utf-8'); print(json.dumps(summary,ensure_ascii=False,indent=2))
           PY
           python /tmp/build.py
       - uses: actions/upload-artifact@v4
         with:
-          name: UOS_BIST_2011_2015_EXPANDED
+          name: UOS_BIST_2011_2015_EXPANDED_QC
           path: uos_out/
           retention-days: 30
