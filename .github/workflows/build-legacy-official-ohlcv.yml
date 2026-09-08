@@ -1,0 +1,120 @@
+name: Build Legacy Official OHLCV
+on:
+  push:
+    paths:
+      - '.github/workflows/build-legacy-official-ohlcv.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests xlrd pandas pyarrow
+      - name: Build official OHLCV 2011-2015
+        run: |
+          cat > /tmp/build.py <<'PY'
+          import requests, zipfile, io, xlrd, json, re, math
+          import pandas as pd
+          from concurrent.futures import ThreadPoolExecutor, as_completed
+          from pathlib import Path
+          out=Path('legacy_official'); out.mkdir(exist_ok=True)
+
+          def norm(x):
+              s=str(x or '').replace('\n',' ').strip().upper()
+              for a,b in [('İ','I'),('Ş','S'),('Ğ','G'),('Ü','U'),('Ö','O'),('Ç','C'),('ı','I'),('ş','S'),('ğ','G'),('ü','U'),('ö','O'),('ç','C')]: s=s.replace(a,b)
+              return ' '.join(s.split())
+          def n(x):
+              try:
+                  if x is None or x=='': return None
+                  if isinstance(x,(int,float)):
+                      v=float(x); return v if math.isfinite(v) else None
+                  s=str(x).strip().replace(' ','')
+                  if not s: return None
+                  if ',' in s and '.' in s:
+                      if s.rfind(',')>s.rfind('.'): s=s.replace('.','').replace(',','.')
+                      else: s=s.replace(',','')
+                  elif ',' in s: s=s.replace(',','.')
+                  return float(s)
+              except: return None
+
+          aliases={
+            'ticker':['PAYIN KODU','HISSE SENEDININ KODU','HISSE SENEDI KODU'],
+            'name':['PAYIN ADI','HISSE SENEDININ ADI','HISSE SENEDININ ADI'],
+            'prev':['ONCEKI KAPANIS FIYATI'], 'open':['ACILIS FIYATI'],
+            'low':['EN DUSUK FIYAT'], 'high':['EN YUKSEK FIYAT'], 'close':['KAPANIS FIYATI'],
+            'vwap':['AGIRLIKLI ORTALAMA FIYAT'], 'turnover':['TOPLAM ISLEM HACMI'],
+            'volume':['TOPLAM ISLEM ADEDI'], 'trades':['TOPLAM SOZLESME SAYISI']}
+          def locate(sh):
+              for i in range(min(25,sh.nrows)):
+                  vals=[norm(sh.cell_value(i,j)) for j in range(sh.ncols)]
+                  mp={}
+                  for key,als in aliases.items():
+                      for j,v in enumerate(vals):
+                          if any(a==v or a in v for a in als): mp[key]=j; break
+                  if all(k in mp for k in ['ticker','low','high','close']): return i,mp
+              return None,None
+          def parse(dt):
+              ds=dt.strftime('%Y%m%d'); y=dt.strftime('%Y'); m=dt.strftime('%m')
+              url=f'https://borsaistanbul.com/data/thb/{y}/{m}/thb{ds}1.zip'
+              audit={'date':dt.strftime('%Y-%m-%d'),'url':url}
+              try:
+                  r=requests.get(url,timeout=45,headers={'User-Agent':'Mozilla/5.0'})
+                  if r.status_code==404: audit['status']='no_file'; return audit,[]
+                  if r.status_code!=200 or not r.content.startswith(b'PK'): audit['status']=f'http_{r.status_code}'; return audit,[]
+                  z=zipfile.ZipFile(io.BytesIO(r.content)); xs=[x for x in z.namelist() if x.lower().endswith('.xls')]
+                  if not xs: audit['status']='no_xls'; return audit,[]
+                  wb=xlrd.open_workbook(file_contents=z.read(xs[0]),formatting_info=False)
+                  rows=[]
+                  for sh in wb.sheets():
+                      h,mp=locate(sh)
+                      if mp is None: continue
+                      for i in range(h+1,sh.nrows):
+                          vals=sh.row_values(i)
+                          def get(k): return vals[mp[k]] if k in mp and mp[k]<len(vals) else None
+                          ticker=norm(get('ticker')).replace('.E','')
+                          if not re.match(r'^[A-Z0-9]{2,12}$',ticker): continue
+                          close=n(get('close')); high=n(get('high')); low=n(get('low'))
+                          if close is None and high is None and low is None: continue
+                          marker=str(vals[0]).strip() if vals else ''
+                          rows.append({'date':dt.strftime('%Y-%m-%d'),'symbol':ticker,'name':str(get('name') or '').strip(),
+                            'prev_close':n(get('prev')),'open':n(get('open')),'high':high,'low':low,'close':close,
+                            'vwap':n(get('vwap')),'turnover_try':n(get('turnover')),'volume':n(get('volume')),'trades':n(get('trades')),
+                            'bist100_pit':1 if '>' in marker else 0,'source':'BIST_LEGACY_DAILY_BULLETIN','sheet':sh.name})
+                  audit['status']='ok'; audit['rows']=len(rows); return audit,rows
+              except Exception as e: audit['status']='error'; audit['error']=repr(e); return audit,[]
+
+          days=pd.bdate_range('2011-01-01','2015-12-31')
+          audits=[]; allrows=[]
+          with ThreadPoolExecutor(max_workers=12) as ex:
+              fs=[ex.submit(parse,d) for d in days]
+              for f in as_completed(fs):
+                  a,r=f.result(); audits.append(a); allrows.extend(r)
+          audit=pd.DataFrame(audits).sort_values('date')
+          p=pd.DataFrame(allrows)
+          if len(p):
+              p=p.sort_values(['date','symbol','sheet']).drop_duplicates(['date','symbol'],keep='first')
+              # QC invalid prices
+              p['ohlc_bad']=((p.high.notna()&p.low.notna()&(p.high<p.low)) | (p.high.notna()&p.close.notna()&(p.close>p.high)) | (p.low.notna()&p.close.notna()&(p.close<p.low)))
+              rejected=p[p.ohlc_bad].copy(); p=p[~p.ohlc_bad].drop(columns='ohlc_bad')
+              pit=p.groupby('date').bist100_pit.sum().rename('pit_count').reset_index()
+              cov=p.groupby('symbol').agg(first_date=('date','min'),last_date=('date','max'),rows=('date','size')).reset_index()
+          else:
+              rejected=pd.DataFrame(); pit=pd.DataFrame(); cov=pd.DataFrame()
+          audit.to_csv(out/'DOWNLOAD_AUDIT.csv',index=False)
+          p.to_parquet(out/'BIST_EQUITY_OHLCV_2011_2015_OFFICIAL.parquet',index=False)
+          p.to_csv(out/'BIST_EQUITY_OHLCV_2011_2015_OFFICIAL.csv.gz',index=False,compression='gzip')
+          rejected.to_csv(out/'REJECTED_OHLC_ROWS.csv',index=False)
+          pit.to_csv(out/'PIT_DAILY_COUNTS.csv',index=False)
+          cov.to_csv(out/'SYMBOL_COVERAGE.csv',index=False)
+          summary={'period':'2011-01-01..2015-12-31','weekdays_attempted':len(days),'bulletin_days':int((audit.status=='ok').sum()),'error_days':int((audit.status=='error').sum()),'rows':int(len(p)),'symbols':int(p.symbol.nunique()) if len(p) else 0,'rejected_ohlc':int(len(rejected)),'pit_dates':int(len(pit)),'pit_exact100_dates':int((pit.pit_count==100).sum()) if len(pit) else 0,'pit_min':int(pit.pit_count.min()) if len(pit) else None,'pit_max':int(pit.pit_count.max()) if len(pit) else None,'source':'Borsa Istanbul legacy daily bulletin TBULT_S1.XLS'}
+          (out/'SUMMARY.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2),encoding='utf-8'); print(json.dumps(summary,ensure_ascii=False,indent=2))
+          PY
+          python /tmp/build.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: UOS_BIST_2011_2015_OFFICIAL_GOLD
+          path: legacy_official/
+          retention-days: 30
