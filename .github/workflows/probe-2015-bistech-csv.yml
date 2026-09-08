@@ -24,17 +24,15 @@ jobs:
             r=requests.get(u,timeout=60,headers={'User-Agent':'Mozilla/5.0'})
             rec={'status':r.status_code,'bytes':len(r.content)}
             if r.status_code==200 and r.content.startswith(b'PK'):
-              z=zipfile.ZipFile(io.BytesIO(r.content)); rec['names']=z.namelist()
-              previews={}
+              z=zipfile.ZipFile(io.BytesIO(r.content)); rec['names']=z.namelist(); rec['samples']={}
               for n in z.namelist():
                 if n.lower().endswith(('.csv','.txt')):
-                  b=z.read(n)
-                  s=None
+                  b=z.read(n); s=None
                   for enc in ['utf-8-sig','cp1254','latin1']:
                     try: s=b.decode(enc); break
                     except: pass
-                  previews[n]=s[:5000] if s else '<decode failed>'
-              rec['previews']=previews
+                  lines=s.splitlines() if s else []
+                  rec['samples'][n]=lines[:7]
             out[ds]=rec
           open('bistech_probe.json','w',encoding='utf-8').write(json.dumps(out,ensure_ascii=False,indent=2))
           print(json.dumps(out,ensure_ascii=False,indent=2)[:40000])
