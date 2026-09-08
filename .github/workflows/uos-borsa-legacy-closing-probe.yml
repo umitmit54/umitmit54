@@ -1,0 +1,32 @@
+name: UOS Legacy Closing Probe
+on:
+  push:
+    branches: [uos-borsa-data-job]
+    paths: ['.github/workflows/uos-borsa-legacy-closing-probe.yml']
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: pip install -q pandas requests xlrd
+      - run: |
+          python - <<'PY'
+          import io,zipfile,requests,pandas as pd,re
+          for ds in ['20110615','20121228','20131231','20141231','20151127']:
+            u=f'https://borsaistanbul.com/data/thb/{ds[:4]}/{ds[4:6]}/thb{ds}2.zip'; r=requests.get(u,timeout=30,headers={'User-Agent':'Mozilla/5.0'});print('\n',ds,r.status_code,r.content[:2])
+            if r.status_code!=200 or r.content[:2]!=b'PK':continue
+            with zipfile.ZipFile(io.BytesIO(r.content)) as z:
+              n=z.namelist()[0];raw=z.read(n);print(n)
+            if not n.lower().endswith('.xls'):continue
+            x=pd.ExcelFile(io.BytesIO(raw),engine='xlrd'); print('has closing', 'Geçici Kapanış Bülteni' in x.sheet_names)
+            if 'Geçici Kapanış Bülteni' not in x.sheet_names:continue
+            d=pd.read_excel(io.BytesIO(raw),sheet_name='Geçici Kapanış Bülteni',header=None,engine='xlrd');print('shape',d.shape)
+            hits=[]
+            for i,row in d.iterrows():
+              vals=[str(v).strip() if pd.notna(v) else '' for v in row.tolist()]
+              if any(re.fullmatch(r'[A-Z0-9]{2,12}\.E',v) for v in vals):hits.append((i,vals))
+            print('ticker rows',len(hits));
+            for x in hits[:5]:print(x)
+            print('member examples',[(i,v) for i,v in hits if '>' in ' '.join(v[:5])][:5])
+          PY
