@@ -13,7 +13,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: pip install pandas pyarrow yfinance requests
+      - run: pip install pandas pyarrow yfinance requests scipy
       - name: Build XU100 + corporate actions
         run: |
           cat > /tmp/build_aux.py <<'PY'
@@ -21,8 +21,6 @@ jobs:
           from pathlib import Path
           out=Path('uos_aux'); out.mkdir(exist_ok=True)
           headers={'User-Agent':'Mozilla/5.0'}
-
-          # current BIST symbols
           r=requests.get('https://www.borsaistanbul.com/datum/hisse_endeks_ds.csv',headers=headers,timeout=60); r.raise_for_status()
           df=pd.read_csv(io.StringIO(r.text),sep=';',encoding='utf-8-sig'); df.columns=[str(c).strip() for c in df.columns]
           if len(df): df=df.iloc[1:].copy()
@@ -32,17 +30,13 @@ jobs:
               if s and s!='nan' and s not in current: current.append(s)
           hist=[x.strip() for x in Path('data/historical_universe_2016.txt').read_text().splitlines() if x.strip()]
           syms=sorted(set(current)|set(hist))
-
-          # Benchmark: try Yahoo XU100 first
-          bench_audit=[]
-          bench=pd.DataFrame()
+          bench_audit=[]; bench=pd.DataFrame()
           for ticker in ['XU100.IS','^XU100']:
               try:
                   q=yf.download(ticker,start='2010-12-01',end='2026-09-06',auto_adjust=False,actions=False,progress=False,threads=False)
                   if len(q):
                       if isinstance(q.columns,pd.MultiIndex): q.columns=q.columns.get_level_values(0)
-                      q=q.reset_index()
-                      q=q.rename(columns={'Date':'date','Open':'open','High':'high','Low':'low','Close':'close','Adj Close':'adj_close','Volume':'volume'})
+                      q=q.reset_index().rename(columns={'Date':'date','Open':'open','High':'high','Low':'low','Close':'close','Adj Close':'adj_close','Volume':'volume'})
                       keep=[c for c in ['date','open','high','low','close','adj_close','volume'] if c in q.columns]
                       bench=q[keep].copy(); bench['ticker']=ticker; break
               except Exception as e: bench_audit.append({'ticker':ticker,'error':repr(e)})
@@ -51,48 +45,32 @@ jobs:
               bench.to_csv(out/'XU100_PRICE_2011_2026_YF.csv',index=False)
               bench[(bench.date>='2011-01-01')&(bench.date<='2015-12-31')].to_csv(out/'XU100_PRICE_2011_2015_YF.csv',index=False)
           pd.DataFrame(bench_audit).to_csv(out/'benchmark_audit.csv',index=False)
-
-          # Corporate actions and adjustment factors
           actions=[]; factors=[]; audit=[]
-          for i,s in enumerate(syms):
+          for s in syms:
               t=s+'.IS'
               try:
                   h=yf.Ticker(t).history(start='2010-12-01',end='2026-09-06',auto_adjust=False,actions=True,repair=True)
                   if h is None or h.empty:
                       audit.append({'symbol':s,'status':'no_data'}); continue
-                  h=h.reset_index()
-                  dcol='Date' if 'Date' in h.columns else h.columns[0]
+                  h=h.reset_index(); dcol='Date' if 'Date' in h.columns else h.columns[0]
                   h['date']=pd.to_datetime(h[dcol]).dt.tz_localize(None)
-                  if 'Dividends' in h.columns or 'Stock Splits' in h.columns:
-                      div=pd.to_numeric(h.get('Dividends',0),errors='coerce').fillna(0)
-                      spl=pd.to_numeric(h.get('Stock Splits',0),errors='coerce').fillna(0)
-                      mask=(div!=0)|(spl!=0)
-                      if mask.any():
-                          a=pd.DataFrame({'date':h.loc[mask,'date'],'symbol':s,'dividend':div[mask].values,'stock_split':spl[mask].values,'source':'YAHOO_ACTIONS'})
-                          actions.append(a)
+                  div=pd.to_numeric(h['Dividends'],errors='coerce').fillna(0) if 'Dividends' in h.columns else pd.Series(0,index=h.index,dtype=float)
+                  spl=pd.to_numeric(h['Stock Splits'],errors='coerce').fillna(0) if 'Stock Splits' in h.columns else pd.Series(0,index=h.index,dtype=float)
+                  mask=(div!=0)|(spl!=0)
+                  if mask.any(): actions.append(pd.DataFrame({'date':h.loc[mask,'date'],'symbol':s,'dividend':div[mask].values,'stock_split':spl[mask].values,'source':'YAHOO_ACTIONS'}))
                   if 'Close' in h.columns and 'Adj Close' in h.columns:
-                      c=pd.to_numeric(h['Close'],errors='coerce'); aclose=pd.to_numeric(h['Adj Close'],errors='coerce')
-                      fac=(aclose/c).replace([np.inf,-np.inf],np.nan)
-                      f=pd.DataFrame({'date':h['date'],'symbol':s,'close_yf':c,'adj_close_yf':aclose,'adjustment_factor_yf':fac})
-                      f=f.dropna(subset=['close_yf','adjustment_factor_yf'])
+                      c=pd.to_numeric(h['Close'],errors='coerce'); aclose=pd.to_numeric(h['Adj Close'],errors='coerce'); fac=(aclose/c).replace([np.inf,-np.inf],np.nan)
+                      f=pd.DataFrame({'date':h['date'],'symbol':s,'close_yf':c,'adj_close_yf':aclose,'adjustment_factor_yf':fac}).dropna(subset=['close_yf','adjustment_factor_yf'])
                       factors.append(f)
-              except Exception as e:
-                  audit.append({'symbol':s,'status':'error','error':repr(e)})
-
+              except Exception as e: audit.append({'symbol':s,'status':'error','error':repr(e)})
           act=pd.concat(actions,ignore_index=True) if actions else pd.DataFrame(columns=['date','symbol','dividend','stock_split','source'])
           fac=pd.concat(factors,ignore_index=True) if factors else pd.DataFrame(columns=['date','symbol','close_yf','adj_close_yf','adjustment_factor_yf'])
           act.to_csv(out/'CORPORATE_ACTIONS_YF_2011_2026.csv',index=False)
           fac.to_parquet(out/'ADJUSTMENT_FACTORS_YF_2011_2026.parquet',index=False)
           fac.to_csv(out/'ADJUSTMENT_FACTORS_YF_2011_2026.csv.gz',index=False,compression='gzip')
           pd.DataFrame(audit).to_csv(out/'corporate_action_audit.csv',index=False)
-          summary={
-            'symbols_requested':len(syms),'symbols_current_seed':len(current),'symbols_2016_seed':len(hist),
-            'benchmark_rows':int(len(bench)),'benchmark_2011_2015_rows':int(((bench.date>='2011-01-01')&(bench.date<='2015-12-31')).sum()) if len(bench) else 0,
-            'corporate_action_rows':int(len(act)),'adjustment_factor_rows':int(len(fac)),
-            'source_note':'Yahoo auxiliary layer; raw GOLD/SILVER OHLC remains authoritative. Adjustments are never silently substituted.'
-          }
-          (out/'SUMMARY.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2),encoding='utf-8')
-          print(json.dumps(summary,ensure_ascii=False,indent=2))
+          summary={'symbols_requested':len(syms),'symbols_current_seed':len(current),'symbols_2016_seed':len(hist),'benchmark_rows':int(len(bench)),'benchmark_2011_2015_rows':int(((bench.date>='2011-01-01')&(bench.date<='2015-12-31')).sum()) if len(bench) else 0,'corporate_action_rows':int(len(act)),'adjustment_factor_rows':int(len(fac)),'audit_rows':len(audit),'source_note':'Yahoo auxiliary layer; raw GOLD/SILVER OHLC remains authoritative. Adjustments are never silently substituted.'}
+          (out/'SUMMARY.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2),encoding='utf-8'); print(json.dumps(summary,ensure_ascii=False,indent=2))
           PY
           python /tmp/build_aux.py
       - uses: actions/upload-artifact@v4
