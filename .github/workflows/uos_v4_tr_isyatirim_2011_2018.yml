@@ -1,0 +1,92 @@
+name: UOS V4 TR IsYatirim 2011-2018
+on:
+  push:
+    paths:
+      - '.github/workflows/uos_v4_tr_isyatirim_2011_2018.yml'
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install pandas requests
+      - name: Build adjustment-factor layer
+        run: |
+          python - <<'PY'
+          import requests, pandas as pd, re, json, time
+          from concurrent.futures import ThreadPoolExecutor, as_completed
+          from pathlib import Path
+
+          # Union of a current KAP-derived BIST list and a historical 2010-2024 archive.
+          symbols=set()
+          try:
+              txt=requests.get('https://raw.githubusercontent.com/ahmeterenodaci/Istanbul-Stock-Exchange--BIST--including-symbols-and-logos/main/bist.csv',timeout=30).text
+              df=pd.read_csv(pd.io.common.StringIO(txt))
+              for c in df.columns:
+                  if str(c).lower()=='symbol':
+                      symbols.update(df[c].dropna().astype(str).str.upper().str.strip())
+          except Exception as e:
+              print('current list error',repr(e))
+
+          try:
+              tree=requests.get('https://api.github.com/repos/burakbayramli/alldata/git/trees/main?recursive=1',timeout=60).json().get('tree',[])
+              for x in tree:
+                  p=x.get('path','')
+                  m=re.fullmatch(r'bist/2010-2024/([A-Z0-9]+)\.csv',p)
+                  if m: symbols.add(m.group(1))
+          except Exception as e:
+              print('archive list error',repr(e))
+
+          symbols={s for s in symbols if 2<=len(s)<=8 and re.fullmatch(r'[A-Z0-9]+',s)}
+          print('symbols',len(symbols))
+
+          URL='https://www.isyatirim.com.tr/_layouts/15/Isyatirim.Website/Common/Data.aspx/HisseTekil'
+          def one(sym):
+              params={'hisse':sym,'startdate':'01-01-2011','enddate':'15-07-2018'}
+              last=None
+              for k in range(3):
+                  try:
+                      r=requests.get(URL,params=params,timeout=60,headers={'User-Agent':'Mozilla/5.0'})
+                      r.raise_for_status(); rows=r.json().get('value',[])
+                      out=[]
+                      for x in rows:
+                          raw=x.get('HG_KAPANIS'); adj=x.get('HGDG_KAPANIS'); d=x.get('HGDG_TARIH')
+                          if raw not in (None,0) and adj is not None and d:
+                              out.append((d,sym,raw,adj,float(adj)/float(raw),'ISYATIRIM_HGDG_HG'))
+                      return sym,out,None
+                  except Exception as e:
+                      last=repr(e); time.sleep(1.5*(k+1))
+              return sym,[],last
+
+          rows=[]; errs=[]
+          with ThreadPoolExecutor(max_workers=8) as ex:
+              futs={ex.submit(one,s):s for s in sorted(symbols)}
+              for i,f in enumerate(as_completed(futs),1):
+                  sym,out,err=f.result(); rows.extend(out)
+                  if err: errs.append({'symbol':sym,'error':err})
+                  if i%50==0: print('done',i,'rows',len(rows),'errs',len(errs))
+
+          fac=pd.DataFrame(rows,columns=['date','symbol','raw_close_isyatirim','adj_close_isyatirim','adjustment_factor','factor_source'])
+          if len(fac):
+              fac['date']=pd.to_datetime(fac['date'],dayfirst=True,errors='coerce').dt.strftime('%Y-%m-%d')
+              fac=fac.dropna(subset=['date']).drop_duplicates(['date','symbol']).sort_values(['date','symbol'])
+          fac.to_csv('ISYATIRIM_ADJUSTMENT_FACTORS_2011_2018.csv.gz',index=False,compression='gzip')
+          cov=(fac.groupby('symbol').agg(first=('date','min'),last=('date','max'),rows=('date','size')).reset_index() if len(fac) else pd.DataFrame(columns=['symbol','first','last','rows']))
+          cov.to_csv('ISYATIRIM_COVERAGE_2011_2018.csv',index=False)
+          pd.DataFrame(errs).to_csv('ISYATIRIM_ERRORS.csv',index=False)
+          status={'symbols_attempted':len(symbols),'symbols_with_factor':int(fac.symbol.nunique()) if len(fac) else 0,'factor_rows':int(len(fac)),'errors':len(errs),'date_min':fac.date.min() if len(fac) else None,'date_max':fac.date.max() if len(fac) else None,'source':'Is Yatirim HGDG/HG','yahoo_fallback_used':False}
+          Path('STATUS.json').write_text(json.dumps(status,ensure_ascii=False,indent=2))
+          print(json.dumps(status,ensure_ascii=False,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: UOS_V4_TR_ISYATIRIM_2011_2018
+          path: |
+            ISYATIRIM_ADJUSTMENT_FACTORS_2011_2018.csv.gz
+            ISYATIRIM_COVERAGE_2011_2018.csv
+            ISYATIRIM_ERRORS.csv
+            STATUS.json
