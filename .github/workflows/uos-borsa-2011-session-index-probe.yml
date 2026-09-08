@@ -1,0 +1,42 @@
+name: UOS Borsa 2011 Session Index Probe
+on:
+  push:
+    branches: [uos-borsa-data-job]
+    paths: ['.github/workflows/uos-borsa-2011-session-index-probe.yml']
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: pip install -q pandas requests xlrd
+      - run: |
+          python - <<'PY'
+          import io,zipfile,requests,pandas as pd,re
+          for ds in ['20110615','20111230']:
+            print('\nDATE',ds)
+            for sess in [1,2]:
+              u=f'https://borsaistanbul.com/data/thb/{ds[:4]}/{ds[4:6]}/thb{ds}{sess}.zip'
+              r=requests.get(u,timeout=30,headers={'User-Agent':'Mozilla/5.0'})
+              print('session',sess,'status',r.status_code,'zip',r.content[:2])
+              if r.status_code!=200 or r.content[:2]!=b'PK': continue
+              with zipfile.ZipFile(io.BytesIO(r.content)) as z:
+                print(' names',z.namelist()[:5]); n=z.namelist()[0]; raw=z.read(n)
+              if not n.lower().endswith('.xls'): continue
+              xls=pd.ExcelFile(io.BytesIO(raw),engine='xlrd')
+              print(' sheets',xls.sheet_names[:10])
+              hits=[]; ticker_rows=[]
+              for sh in xls.sheet_names:
+                d=pd.read_excel(io.BytesIO(raw),sheet_name=sh,header=None,engine='xlrd')
+                for ri,row in d.iterrows():
+                  vals=[str(v).strip() if pd.notna(v) else '' for v in row.tolist()]
+                  joined=' | '.join(vals)
+                  if re.search(r'İMKB\s*100|BIST\s*100',joined,re.I): hits.append((sh,ri,joined[:300]))
+                  if any(v.endswith('.E') for v in vals):
+                    t=[v for v in vals if v.endswith('.E')]
+                    ticker_rows.append((sh,ri,t[:3],vals[:15]))
+              print(' index_hits',hits[:20])
+              print(' ticker_examples',ticker_rows[:10])
+              print(' ticker_count',len(ticker_rows))
+          PY
