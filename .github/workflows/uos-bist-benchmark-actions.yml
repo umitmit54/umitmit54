@@ -1,0 +1,81 @@
+name: UOS BIST Benchmark Actions
+on:
+  push:
+    paths:
+      - '.github/workflows/uos-bist-benchmark-actions.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install pandas pyarrow yfinance
+      - name: Build benchmark and actions
+        run: |
+          cat > /tmp/build.py <<'PY'
+          import json, pandas as pd, yfinance as yf
+          from pathlib import Path
+          out=Path('uos_out'); out.mkdir(exist_ok=True)
+
+          # Benchmark: try known Yahoo symbols and pick the longest valid 2011-2015 series.
+          candidates=['XU100.IS','^XU100','XU100']
+          trials=[]; best=None; bestsym=None
+          for s in candidates:
+              try:
+                  q=yf.download(s,start='2010-12-01',end='2016-01-05',auto_adjust=False,actions=False,progress=False)
+                  if isinstance(q.columns,pd.MultiIndex): q.columns=q.columns.get_level_values(0)
+                  q=q.reset_index()
+                  if 'Date' in q and 'Close' in q:
+                      z=q[(q.Date>='2011-01-01')&(q.Date<='2015-12-31')].dropna(subset=['Close']).copy()
+                  else: z=pd.DataFrame()
+                  trials.append({'symbol':s,'rows':len(z)})
+                  if best is None or len(z)>len(best): best=z; bestsym=s
+              except Exception as e: trials.append({'symbol':s,'rows':0,'error':repr(e)})
+          if best is None or len(best)<500:
+              raise RuntimeError('No adequate XU100 benchmark from Yahoo: '+repr(trials))
+          keep=[c for c in ['Date','Open','High','Low','Close','Adj Close','Volume'] if c in best.columns]
+          best=best[keep].copy(); best['source']='YAHOO'; best['source_symbol']=bestsym
+          best.to_csv(out/'XU100_BENCHMARK_2011_2015.csv',index=False)
+          best.to_parquet(out/'XU100_BENCHMARK_2011_2015.parquet',index=False)
+
+          # Corporate actions for union of current/2016 historical symbols.
+          syms=[]
+          p=Path('data/historical_universe_2016.txt')
+          if p.exists(): syms += [x.strip() for x in p.read_text().splitlines() if x.strip()]
+          # extra symbols known from silver coverage if available in repo; harmless if absent
+          p2=Path('data/current_bist_symbols.txt')
+          if p2.exists(): syms += [x.strip() for x in p2.read_text().splitlines() if x.strip()]
+          syms=sorted(set(syms))
+          rows=[]; audit=[]
+          for i,s in enumerate(syms):
+              try:
+                  a=yf.Ticker(s+'.IS').actions
+                  if a is None or len(a)==0:
+                      audit.append({'symbol':s,'status':'no_actions'}); continue
+                  a=a.reset_index()
+                  datecol='Date' if 'Date' in a.columns else a.columns[0]
+                  a[datecol]=pd.to_datetime(a[datecol],errors='coerce',utc=True).dt.tz_convert(None)
+                  a=a[(a[datecol]>='2011-01-01')&(a[datecol]<='2026-12-31')]
+                  for _,r in a.iterrows():
+                      div=float(r.get('Dividends',0) or 0); split=float(r.get('Stock Splits',0) or 0)
+                      if div!=0 or split!=0:
+                          rows.append({'date':r[datecol].date().isoformat(),'ticker':s,'dividend':div,'split_ratio':split,'source':'YAHOO_ACTIONS'})
+              except Exception as e: audit.append({'symbol':s,'status':'error','error':repr(e)})
+          acts=pd.DataFrame(rows,columns=['date','ticker','dividend','split_ratio','source'])
+          acts.to_csv(out/'CORPORATE_ACTIONS_2011_2026_YAHOO.csv',index=False)
+          acts.to_parquet(out/'CORPORATE_ACTIONS_2011_2026_YAHOO.parquet',index=False)
+          pd.DataFrame(audit).to_csv(out/'CORPORATE_ACTIONS_AUDIT.csv',index=False)
+          summary={'benchmark_symbol':bestsym,'benchmark_rows':int(len(best)),'benchmark_trials':trials,'action_symbols_seeded':len(syms),'action_events':int(len(acts)),'benchmark_status':'PASS' if len(best)>=1000 else 'PARTIAL','actions_status':'SECONDARY_SOURCE'}
+          (out/'SUMMARY.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2),encoding='utf-8')
+          print(json.dumps(summary,ensure_ascii=False,indent=2))
+          PY
+          python /tmp/build.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: UOS_BIST_BENCHMARK_ACTIONS
+          path: uos_out/
+          retention-days: 30
