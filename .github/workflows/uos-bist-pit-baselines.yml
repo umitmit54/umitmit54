@@ -14,7 +14,7 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install pdfplumber requests pandas
-      - name: Read vector markers in official KAP matrices
+      - name: Read glyph markers in official KAP matrices
         run: |
           cat > /tmp/extract.py <<'PY'
           import io,re,json,requests,pdfplumber,pandas as pd
@@ -24,26 +24,21 @@ jobs:
             '2011Q3':'https://kap.org.tr/tr/api/file/download/33E834372306023CE0530A4A622B5826',
             '2012Q2':'https://kap.org.tr/tr/api/file/download/33E8343736DC023CE0530A4A622B5826',
           }
-          def center(o):
-              x0=o.get('x0'); x1=o.get('x1'); top=o.get('top'); bottom=o.get('bottom')
-              if None in (x0,x1,top,bottom): return None
-              return ((x0+x1)/2,(top+bottom)/2,x1-x0,bottom-top)
           for label,url in docs.items():
               b=requests.get(url,timeout=60,headers={'User-Agent':'Mozilla/5.0'}); b.raise_for_status()
-              pdf=pdfplumber.open(io.BytesIO(b.content)); allrows=[]; shape_stats=[]
+              pdf=pdfplumber.open(io.BytesIO(b.content)); rows=[]; glyphs=[]
               for pi,page in enumerate(pdf.pages):
                   words=page.extract_words(x_tolerance=2,y_tolerance=2,keep_blank_chars=False)
                   hdr=[w for w in words if w['text'].upper()=='XU100']
                   if not hdr: continue
                   hx=(hdr[0]['x0']+hdr[0]['x1'])/2; name_end=hdr[0]['x0']-2
-                  shapes=[]
-                  for typ,objs in [('rect',page.rects),('curve',page.curves),('line',page.lines)]:
-                      for o in objs:
-                          c=center(o)
-                          if c and c[2] <= 12 and c[3] <= 12:
-                              shapes.append((typ,*c))
-                              shape_stats.append({'page':pi+1,'type':typ,'cx':round(c[0],2),'cy':round(c[1],2),'w':round(c[2],2),'h':round(c[3],2)})
-                  # group text rows
+                  # all glyph chars to right of stock-name region
+                  chars=[]
+                  for c in page.chars:
+                      cx=(c['x0']+c['x1'])/2; cy=(c['top']+c['bottom'])/2
+                      if c['x0']>=name_end:
+                          chars.append((str(c.get('text','')),cx,cy,c.get('fontname','')))
+                          glyphs.append({'page':pi+1,'text':str(c.get('text','')),'cx':round(cx,2),'cy':round(cy,2),'font':c.get('fontname','')})
                   groups=[]
                   for w in sorted(words,key=lambda x:(x['top'],x['x0'])):
                       placed=False
@@ -56,11 +51,11 @@ jobs:
                       name=re.sub(r'\s+',' ',' '.join(w['text'] for w in sorted(left,key=lambda x:x['x0']))).strip()
                       if len(name)<3 or any(k in name.upper() for k in ['TARİHLERİ','HİSSE SENETLERİ','ULUSAL PAZAR','EK:']): continue
                       y=sum((w['top']+w['bottom'])/2 for w in left)/len(left)
-                      nearby=[s for s in shapes if abs(s[2]-y)<4.0]
-                      allrows.append({'page':pi+1,'name':name,'row_y':round(y,2),'xu100_header_x':round(hx,2),'shape_centers':'|'.join(f'{s[0]}@{s[1]:.1f},{s[2]:.1f}' for s in nearby)})
-              pd.DataFrame(allrows).to_csv(out/f'{label}_ROWS_SHAPES.csv',index=False)
-              pd.DataFrame(shape_stats).to_csv(out/f'{label}_SHAPES.csv',index=False)
-              sample=pd.DataFrame(allrows)
+                      near=[c for c in chars if abs(c[2]-y)<3.5]
+                      rows.append({'page':pi+1,'name':name,'row_y':round(y,2),'xu100_header_x':round(hx,2),'glyphs':'|'.join(f'{c[0]}@{c[1]:.1f}' for c in near)})
+              pd.DataFrame(rows).to_csv(out/f'{label}_ROWS_GLYPHS.csv',index=False)
+              pd.DataFrame(glyphs).to_csv(out/f'{label}_ALL_GLYPHS.csv',index=False)
+              sample=pd.DataFrame(rows)
               sample=sample[sample.name.str.contains('AKBANK|ACIBADEM|ARÇELİK|BİM MAĞAZALAR|BURÇELİK',case=False,regex=True)]
               sample.to_csv(out/f'{label}_SAMPLE.csv',index=False)
               print(label, sample.to_dict('records'))
@@ -68,6 +63,6 @@ jobs:
           python /tmp/extract.py
       - uses: actions/upload-artifact@v4
         with:
-          name: UOS_BIST_PIT_VECTOR_DIAG
+          name: UOS_BIST_PIT_GLYPH_DIAG
           path: pit_out/
           retention-days: 30
