@@ -1,0 +1,77 @@
+name: UOS BIST PIT Baselines
+on:
+  push:
+    paths:
+      - '.github/workflows/uos-bist-pit-baselines.yml'
+  workflow_dispatch:
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install pdfplumber requests pandas
+      - name: Extract XU100 memberships from official KAP matrices
+        run: |
+          cat > /tmp/extract.py <<'PY'
+          import io,re,json,requests,pdfplumber,pandas as pd
+          from pathlib import Path
+          out=Path('pit_out'); out.mkdir(exist_ok=True)
+          docs={
+            '2011Q3':'https://kap.org.tr/tr/api/file/download/33E834372306023CE0530A4A622B5826',
+            '2012Q2':'https://kap.org.tr/tr/api/file/download/33E8343736DC023CE0530A4A622B5826',
+          }
+          def norm(s):
+              return re.sub(r'\s+',' ',s).strip()
+          def extract(label,url):
+              b=requests.get(url,timeout=60,headers={'User-Agent':'Mozilla/5.0'}); b.raise_for_status()
+              pdf=pdfplumber.open(io.BytesIO(b.content))
+              members=[]; diag=[]
+              for pi,page in enumerate(pdf.pages):
+                  words=page.extract_words(x_tolerance=2,y_tolerance=2,keep_blank_chars=False)
+                  hdr=[w for w in words if w['text'].upper()=='XU100']
+                  if not hdr: continue
+                  hx=(hdr[0]['x0']+hdr[0]['x1'])/2
+                  # group words into visual lines by top
+                  groups=[]
+                  for w in sorted(words,key=lambda x:(x['top'],x['x0'])):
+                      placed=False
+                      for g in groups[-5:]:
+                          if abs(g[0]['top']-w['top'])<2.2:
+                              g.append(w); placed=True; break
+                      if not placed: groups.append([w])
+                  for g in groups:
+                      # stock rows have name left of XU100 header and bullet/marker near XU100 x
+                      left=[w for w in g if w['x1'] < hdr[0]['x0']-2]
+                      if not left: continue
+                      name=norm(' '.join(w['text'] for w in sorted(left,key=lambda x:x['x0'])))
+                      if not name or any(k in name.upper() for k in ['EK:','TARİHLERİ','HİSSE SENETLERİ','ULUSAL PAZAR','İKİNCİ ULUSAL','KURUMSAL ÜRÜNLER','GÖZALTI','SERBEST İŞLEM']):
+                          continue
+                      near=[]
+                      for w in g:
+                          cx=(w['x0']+w['x1'])/2
+                          if abs(cx-hx)<9 and w['text'].upper()!='XU100': near.append(w['text'])
+                      ismem=bool(near)
+                      # diagnostics for all stock-looking rows
+                      if len(name)>2:
+                          diag.append({'page':pi+1,'name':name,'xu100_x':hx,'near_xu100':'|'.join(near),'member':int(ismem)})
+                          if ismem: members.append(name)
+              # dedupe preserving order
+              members=list(dict.fromkeys(members))
+              pd.DataFrame({'name':members}).to_csv(out/f'{label}_XU100_NAMES.csv',index=False)
+              pd.DataFrame(diag).to_csv(out/f'{label}_DIAGNOSTICS.csv',index=False)
+              return {'label':label,'members':len(members),'names':members}
+          sums=[]
+          for k,u in docs.items(): sums.append(extract(k,u))
+          (out/'SUMMARY.json').write_text(json.dumps(sums,ensure_ascii=False,indent=2),encoding='utf-8')
+          print(json.dumps([{x['label']:x['members']} for x in sums],ensure_ascii=False))
+          PY
+          python /tmp/extract.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: UOS_BIST_PIT_BASELINES
+          path: pit_out/
+          retention-days: 30
