@@ -1,0 +1,106 @@
+name: UOS Legacy Layers
+on:
+  push:
+    paths:
+      - '.github/workflows/uos_legacy_layers.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install pandas pyarrow yfinance requests xlrd==2.0.1
+      - name: Build legacy layers and probe official XLS
+        run: |
+          cat > /tmp/build.py <<'PY'
+          import io, json, zipfile, re, time
+          from pathlib import Path
+          import pandas as pd, numpy as np, requests, xlrd, yfinance as yf
+          out=Path('legacy_layers'); out.mkdir(exist_ok=True)
+          H={'User-Agent':'Mozilla/5.0'}
+
+          # A) Probe official legacy BIST bulletins across years.
+          samples=['20110103','20120102','20130102','20140102','20150102','20150731']
+          probes=[]
+          for ds in samples:
+              y,m,d=int(ds[:4]),int(ds[4:6]),int(ds[6:8])
+              url=f'https://borsaistanbul.com/data/thb/{y}/{m:02d}/thb{y}{m:02d}{d:02d}1.zip'
+              rec={'date':ds,'url':url}
+              try:
+                  r=requests.get(url,headers=H,timeout=60)
+                  rec['http']=r.status_code; rec['bytes']=len(r.content)
+                  if r.ok and r.content[:2]==b'PK':
+                      z=zipfile.ZipFile(io.BytesIO(r.content)); rec['members']=';'.join(z.namelist())
+                      xs=[n for n in z.namelist() if n.lower().endswith('.xls')]
+                      if xs:
+                          raw=z.read(xs[0]); book=xlrd.open_workbook(file_contents=raw)
+                          rec['sheets']=';'.join(book.sheet_names())
+                          lines=[]
+                          for sh in book.sheets():
+                              lines.append(f'### SHEET {sh.name} {sh.nrows}x{sh.ncols}')
+                              for i in range(min(sh.nrows,140)):
+                                  vals=[str(v).strip() for v in sh.row_values(i)]
+                                  txt=' | '.join(vals)
+                                  if txt.strip(' |'):
+                                      lines.append(f'{i}: {txt}')
+                          (out/f'probe_{ds}.txt').write_text('\n'.join(lines),encoding='utf-8')
+                          rec['probe_saved']=True
+              except Exception as e: rec['error']=repr(e)
+              probes.append(rec)
+          pd.DataFrame(probes).to_csv(out/'OFFICIAL_XLS_PROBE_MANIFEST.csv',index=False)
+
+          # B) 2011-2015 XU100 benchmark: test several Yahoo aliases.
+          bench=[]; alias_status=[]
+          for alias in ['XU100.IS','^XU100','XU100']:
+              try:
+                  q=yf.download(alias,start='2010-06-01',end='2016-01-05',auto_adjust=False,actions=False,progress=False,threads=False)
+                  if isinstance(q.columns,pd.MultiIndex): q.columns=q.columns.get_level_values(0)
+                  q=q.reset_index()
+                  n=int(q['Close'].notna().sum()) if 'Close' in q else 0
+                  alias_status.append({'alias':alias,'rows':n})
+                  if n>500:
+                      q=q[(q['Date']>='2011-01-01')&(q['Date']<='2015-12-31')].copy()
+                      q['benchmark']='XU100_PRICE'; q['source']=f'YAHOO:{alias}'
+                      bench.append(q)
+                      break
+              except Exception as e: alias_status.append({'alias':alias,'error':repr(e)})
+          pd.DataFrame(alias_status).to_csv(out/'XU100_ALIAS_AUDIT.csv',index=False)
+          if bench:
+              b=bench[0]
+              b.to_csv(out/'XU100_PRICE_2011_2015.csv',index=False)
+
+          # C) Corporate actions from Yahoo for official 2016 historical universe.
+          syms=[x.strip() for x in Path('data/historical_universe_2016.txt').read_text().splitlines() if x.strip()]
+          acts=[]; act_audit=[]
+          for i in range(0,len(syms),20):
+              ch=syms[i:i+20]; tick=[s+'.IS' for s in ch]
+              try:
+                  q=yf.download(tick,start='2010-06-01',end='2016-01-05',group_by='ticker',auto_adjust=False,actions=True,progress=False,threads=True)
+                  for s,t in zip(ch,tick):
+                      try:
+                          z=q[t] if isinstance(q.columns,pd.MultiIndex) else q
+                          z=z.reset_index()
+                          for col,etype in [('Dividends','DIVIDEND'),('Stock Splits','SPLIT')]:
+                              if col in z.columns:
+                                  w=z[pd.to_numeric(z[col],errors='coerce').fillna(0)!=0][['Date',col]].copy()
+                                  for _,r in w.iterrows():
+                                      acts.append({'date':pd.to_datetime(r['Date']).date().isoformat(),'symbol':s,'event_type':etype,'value':float(r[col]),'source':'YAHOO_ACTIONS'})
+                      except Exception as e: act_audit.append({'symbol':s,'error':repr(e)})
+              except Exception as e: act_audit.append({'batch':i,'error':repr(e)})
+          pd.DataFrame(acts).sort_values(['date','symbol']).to_csv(out/'CORPORATE_ACTIONS_2011_2015.csv',index=False)
+          pd.DataFrame(act_audit).to_csv(out/'CORPORATE_ACTION_AUDIT.csv',index=False)
+
+          summary={'probe_files':sum(1 for x in probes if x.get('probe_saved')),'benchmark_rows':int(len(bench[0])) if bench else 0,'corporate_actions':len(acts),'status':'PROBE_COMPLETE'}
+          (out/'SUMMARY.json').write_text(json.dumps(summary,indent=2),encoding='utf-8')
+          print(json.dumps(summary,indent=2))
+          PY
+          python /tmp/build.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: UOS_LEGACY_LAYERS_PROBE
+          path: legacy_layers/
+          retention-days: 30
