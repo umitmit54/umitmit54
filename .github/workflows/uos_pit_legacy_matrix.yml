@@ -1,0 +1,83 @@
+name: UOS Official Legacy PIT Matrix
+on:
+  push:
+    paths:
+      - '.github/workflows/uos_pit_legacy_matrix.yml'
+  workflow_dispatch:
+
+jobs:
+  extract:
+    strategy:
+      fail-fast: false
+      matrix:
+        year: [2011, 2012, 2013, 2014, 2015]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install pandas pyarrow requests xlrd==2.0.1
+      - name: Extract year
+        env:
+          YEAR: ${{ matrix.year }}
+        run: |
+          cat > /tmp/pit.py <<'PY'
+          import io,re,json,zipfile,os
+          from pathlib import Path
+          from datetime import date,timedelta
+          from concurrent.futures import ThreadPoolExecutor,as_completed
+          import pandas as pd, requests, xlrd
+          Y=int(os.environ['YEAR']); OUT=Path('out'); OUT.mkdir(exist_ok=True)
+          TICK=re.compile(r'^[A-Z0-9]{2,12}\.E$'); H={'User-Agent':'Mozilla/5.0'}
+          def norm(s):
+              return ' '.join(str(s or '').strip().upper().replace('İ','I').replace('Ş','S').replace('Ğ','G').replace('Ü','U').replace('Ö','O').replace('Ç','C').split())
+          def parse(dt):
+              ds=dt.strftime('%Y%m%d'); url=f'https://borsaistanbul.com/data/thb/{Y}/{dt.month:02d}/thb{ds}1.zip'; a={'date':dt.isoformat(),'url':url}
+              try:
+                  r=requests.get(url,headers=H,timeout=25); a['http']=r.status_code
+                  if r.status_code==404:return a,[],None
+                  r.raise_for_status()
+                  if r.content[:2]!=b'PK': a['error']='not_zip'; return a,[],None
+                  z=zipfile.ZipFile(io.BytesIO(r.content)); xs=[n for n in z.namelist() if n.lower().endswith('.xls')]
+                  if not xs:a['error']='no_xls';return a,[],None
+                  b=xlrd.open_workbook(file_contents=z.read(xs[0])); listed=set(); mem=set(); bench=None
+                  for sh in b.sheets():
+                      if norm(sh.name)=='ENDEKSLER':
+                          for i in range(sh.nrows):
+                              row=sh.row_values(i); nm=norm(row[0]) if row else ''
+                              if nm in ('IMKB 100','BIST 100') and len(row)>=12:
+                                  try: bench={'date':dt.isoformat(),'index_name':nm,'price_open':float(row[1]),'price_low':float(row[2]),'price_high':float(row[3]),'price_close':float(row[4]),'price_prev_close':float(row[5]) if row[5]!='' else None,'return_close':float(row[8]) if row[8]!='' else None,'return_prev_close':float(row[9]) if row[9]!='' else None,'source':'BIST_OFFICIAL_TBULT_S1'}
+                                  except: pass
+                      for i in range(sh.nrows):
+                          row=sh.row_values(i)
+                          for j,v in enumerate(row):
+                              sv=str(v).strip().upper()
+                              if TICK.match(sv):
+                                  s=sv[:-2]; listed.add(s)
+                                  if j>0 and '>' in str(row[j-1]): mem.add(s)
+                  a.update({'status':'ok','listed_count':len(listed),'bist100_count':len(mem),'benchmark_ok':bench is not None})
+                  return a,[{'date':dt.isoformat(),'symbol':s,'listed':1,'bist100_pit':int(s in mem),'source':'BIST_OFFICIAL_TBULT_S1'} for s in sorted(listed)],bench
+              except Exception as e:a['status']='error';a['error']=repr(e);return a,[],None
+          end=date(Y,12,31) if Y<2015 else date(2015,7,31); d=date(Y,1,1); dates=[]
+          while d<=end:
+              if d.weekday()<5:dates.append(d)
+              d+=timedelta(days=1)
+          audits=[];rows=[];benches=[]
+          with ThreadPoolExecutor(max_workers=20) as ex:
+              fut=[ex.submit(parse,d) for d in dates]
+              for k,f in enumerate(as_completed(fut),1):
+                  a,r,b=f.result();audits.append(a);rows.extend(r);benches.extend([b] if b else [])
+                  if k%50==0:print(Y,k,'/',len(dates),flush=True)
+          aud=pd.DataFrame(audits).sort_values('date'); pit=pd.DataFrame(rows); ben=pd.DataFrame(benches).sort_values('date')
+          if len(pit):pit=pit.sort_values(['date','symbol']).drop_duplicates(['date','symbol'])
+          aud.to_csv(OUT/f'AUDIT_{Y}.csv',index=False); pit.to_parquet(OUT/f'PIT_{Y}.parquet',index=False); pit.to_csv(OUT/f'PIT_{Y}.csv.gz',index=False,compression='gzip'); ben.to_csv(OUT/f'XU100_{Y}.csv',index=False)
+          tr=aud[aud.get('status','').eq('ok')] if 'status' in aud else pd.DataFrame(); dist=tr['bist100_count'].value_counts().sort_index().to_dict() if len(tr) else {}; anomalies=tr[~tr['bist100_count'].between(95,105)] if len(tr) else pd.DataFrame(); anomalies.to_csv(OUT/f'PIT_COUNT_ANOMALIES_{Y}.csv',index=False)
+          s={'year':Y,'weekdays':len(dates),'trading_days':len(tr),'pit_rows':len(pit),'symbols':int(pit.symbol.nunique()) if len(pit) else 0,'benchmark_days':len(ben),'count_distribution':{str(k):int(v) for k,v in dist.items()},'anomaly_days':len(anomalies)}
+          (OUT/f'SUMMARY_{Y}.json').write_text(json.dumps(s,indent=2),encoding='utf-8');print(json.dumps(s,indent=2))
+          PY
+          python /tmp/pit.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PIT_${{ matrix.year }}
+          path: out/
+          retention-days: 30
