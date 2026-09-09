@@ -1,0 +1,56 @@
+name: UOS BIST Silver PIT Gap
+on:
+  push:
+    paths:
+      - '.github/workflows/uos-bist-silver-gap.yml'
+  workflow_dispatch:
+
+jobs:
+  fill:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install pandas pyarrow yfinance
+      - name: Fetch historical PIT symbols
+        run: |
+          cat > /tmp/fill.py <<'PY'
+          import pandas as pd, yfinance as yf, json
+          from pathlib import Path
+          out=Path('out'); out.mkdir(exist_ok=True)
+          syms='ADNAC AKFEN ANACM ASYAB AVISA BMEKS BOYNR DYHOL FINBN GOLDS IPEKE ITTFH KILER KOZAA KOZAL MUTLU NTTUR PEGYO PTOFS RHEAG SAFGY SODA TEBNK TEKST TIRE TRKCM YAZIC YKSGR'.split()
+          rows=[]; audit=[]
+          for s in syms:
+              try:
+                  q=yf.download(s+'.IS',start='2010-06-01',end='2016-01-05',auto_adjust=False,actions=False,progress=False,threads=False)
+                  if isinstance(q.columns,pd.MultiIndex): q.columns=q.columns.get_level_values(0)
+                  q=q.reset_index()
+                  need=['Date','Open','High','Low','Close','Volume']
+                  if all(c in q.columns for c in need):
+                      q=q[need].copy(); q=q[(q.Date>='2011-01-01')&(q.Date<='2015-12-31')].dropna(subset=['Close'])
+                  else: q=pd.DataFrame()
+                  if len(q):
+                      q['symbol']=s; q['universe_seed']='PIT_GAP'; q['source']='YAHOO_PIT_GAP'; rows.append(q)
+                      audit.append({'symbol':s,'rows':len(q),'status':'ok','first':str(q.Date.min()),'last':str(q.Date.max())})
+                  else: audit.append({'symbol':s,'rows':0,'status':'no_data'})
+              except Exception as e: audit.append({'symbol':s,'rows':0,'status':'error','error':repr(e)})
+          p=pd.concat(rows,ignore_index=True) if rows else pd.DataFrame(columns=['Date','Open','High','Low','Close','Volume','symbol','universe_seed','source'])
+          if len(p):
+              bad=(p.High<p.Low)|(p.High<p.Open)|(p.High<p.Close)|(p.Low>p.Open)|(p.Low>p.Close)
+              rejects=p[bad].copy(); p=p[~bad].copy()
+          else: rejects=p.copy()
+          p.to_csv(out/'PIT_GAP_OHLCV_2011_2015.csv.gz',index=False,compression='gzip')
+          p.to_parquet(out/'PIT_GAP_OHLCV_2011_2015.parquet',index=False)
+          pd.DataFrame(audit).to_csv(out/'PIT_GAP_AUDIT.csv',index=False)
+          rejects.to_csv(out/'PIT_GAP_REJECTED.csv',index=False)
+          summary={'requested':len(syms),'symbols_found':int(p.symbol.nunique()) if len(p) else 0,'rows':int(len(p)),'rejected':int(len(rejects)),'missing':[a['symbol'] for a in audit if a['status']!='ok']}
+          (out/'SUMMARY.json').write_text(json.dumps(summary,indent=2),encoding='utf-8')
+          print(json.dumps(summary,indent=2))
+          PY
+          python /tmp/fill.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: UOS_BIST_SILVER_PIT_GAP
+          path: out/
+          retention-days: 30
