@@ -1,0 +1,58 @@
+name: UOS Corporate Actions 2016-2026
+on:
+  push:
+    paths:
+      - '.github/workflows/uos_corporate_actions_2016_2026.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install pandas yfinance requests
+      - name: Build actions
+        run: |
+          cat > /tmp/a.py <<'PY'
+          import io,json,requests,pandas as pd,yfinance as yf
+          from pathlib import Path
+          out=Path('out');out.mkdir(exist_ok=True)
+          hist=[x.strip() for x in Path('data/historical_universe_2016.txt').read_text().splitlines() if x.strip()]
+          cur=[]
+          try:
+              r=requests.get('https://www.borsaistanbul.com/datum/hisse_endeks_ds.csv',headers={'User-Agent':'Mozilla/5.0'},timeout=60); r.raise_for_status()
+              d=pd.read_csv(io.StringIO(r.text),sep=';',encoding='utf-8-sig');d.columns=[str(c).strip() for c in d.columns]
+              if len(d):d=d.iloc[1:]
+              for x in d.get('BILESEN KODU',[]):
+                  s=str(x).strip().replace('.E','')
+                  if s and s!='nan':cur.append(s)
+          except Exception:pass
+          syms=sorted(set(hist)|set(cur)); acts=[];audit=[]
+          for i in range(0,len(syms),15):
+              ch=syms[i:i+15];tick=[s+'.IS' for s in ch]
+              try:
+                  q=yf.download(tick,start='2016-01-01',end='2026-09-10',group_by='ticker',auto_adjust=False,actions=True,progress=False,threads=True)
+                  for s,t in zip(ch,tick):
+                      try:
+                          z=q[t] if isinstance(q.columns,pd.MultiIndex) else q;z=z.reset_index()
+                          for col,typ in [('Dividends','DIVIDEND'),('Stock Splits','SPLIT')]:
+                              if col in z:
+                                  w=z[pd.to_numeric(z[col],errors='coerce').fillna(0)!=0][['Date',col]]
+                                  for _,r in w.iterrows():acts.append({'date':pd.to_datetime(r.Date).date().isoformat(),'symbol':s,'event_type':typ,'value':float(r[col]),'source':'YAHOO_ACTIONS'})
+                      except Exception as e:audit.append({'symbol':s,'error':repr(e)})
+              except Exception as e:audit.append({'batch':i,'error':repr(e)})
+          a=pd.DataFrame(acts)
+          if len(a):a=a.sort_values(['date','symbol','event_type']).drop_duplicates()
+          a.to_csv(out/'CORPORATE_ACTIONS_2016_2026.csv',index=False);pd.DataFrame(audit).to_csv(out/'AUDIT.csv',index=False)
+          s={'requested_symbols':len(syms),'events':len(a),'symbols_with_events':int(a.symbol.nunique()) if len(a) else 0,'status':'COMPLETE_SOURCE_YAHOO'}
+          (out/'SUMMARY.json').write_text(json.dumps(s,indent=2),encoding='utf-8');print(json.dumps(s,indent=2))
+          PY
+          python /tmp/a.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: UOS_CORPORATE_ACTIONS_2016_2026
+          path: out/
+          retention-days: 30
